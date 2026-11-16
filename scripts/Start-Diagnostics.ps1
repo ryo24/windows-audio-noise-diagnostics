@@ -80,13 +80,13 @@ function Start-CollectionWorker {
     $script:worker=[PowerShell]::Create()
     $script:workerMode=$Mode
     [void]$script:worker.AddScript({
-        param($CorePath,$InventoryPath,$Mode,$Salt,$StartUtc,$EndUtc)
+        param($CorePath,$InventoryPath,$Mode,$Salt,$StartUtc,$EndUtc,$CaptureDrivers)
         $ErrorActionPreference='Stop'
         . $CorePath
         . $InventoryPath
         if ($Mode -eq 'inventory') { Get-DiagnosticInventory $Salt }
-        else { Get-RelatedEvents -Start $StartUtc -End $EndUtc }
-    }).AddArgument((Join-Path $PSScriptRoot 'Core.ps1')).AddArgument((Join-Path $PSScriptRoot 'Inventory.ps1')).AddArgument($Mode).AddArgument($script:session.id).AddArgument($StartUtc).AddArgument($EndUtc)
+        else { Get-TestEvidence -Start $StartUtc -End $EndUtc -Salt $Salt -IncludeDrivers:$CaptureDrivers }
+    }).AddArgument((Join-Path $PSScriptRoot 'Core.ps1')).AddArgument((Join-Path $PSScriptRoot 'Inventory.ps1')).AddArgument($Mode).AddArgument($script:session.id).AddArgument($StartUtc).AddArgument($EndUtc).AddArgument(($Mode -eq 'events' -and $script:eventsTest.kind -eq 'driver'))
     $script:workerHandle=$script:worker.BeginInvoke()
     $status.Text='PC情報・関連イベントを取得しています。画面はそのままお待ちください。'
     Update-UiState
@@ -288,7 +288,10 @@ $timer.Add_Tick({
             $value=@($script:worker.EndInvoke($script:workerHandle))
             if ($script:worker.HadErrors -or $value.Count -ne 1) { throw '情報取得の一部を完了できませんでした。すでに保存した記録は保持しています。' }
             if ($script:workerMode -eq 'inventory') { $script:session.inventory=$value[0] }
-            else { $script:eventsTest | Add-Member -NotePropertyName relatedEvents -NotePropertyValue $value[0] -Force }
+            else {
+                $script:eventsTest | Add-Member -NotePropertyName relatedEvents -NotePropertyValue $value[0].relatedEvents -Force
+                if ($value[0].driverSnapshot) { $script:eventsTest | Add-Member -NotePropertyName driverSnapshot -NotePropertyValue $value[0].driverSnapshot -Force }
+            }
             Save-CurrentSession
             $status.Text='保存しました。報告書で取得結果と次の手順を確認できます。'
         } catch { $status.Text='取得を完了できませんでした。保存済みの記録は保持しています。'; Show-UiError $_.Exception.Message }
@@ -318,12 +321,13 @@ try {
             $deadline=[DateTime]::UtcNow.AddSeconds(120)
             while ($script:worker -and [DateTime]::UtcNow -lt $deadline) { [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
             if ($script:worker -or -not $script:session.inventory -or -not $start.Enabled) { throw 'The UI inventory workflow did not complete.' }
+            $testChoice.SelectedIndex=7
             $start.PerformClick(); $mark.PerformClick()
             if (@($script:activeTest.noiseUtc).Count -ne 1) { throw 'The UI did not save the marker.' }
             $finish.PerformClick()
             $deadline=[DateTime]::UtcNow.AddSeconds(45)
             while ($script:worker -and [DateTime]::UtcNow -lt $deadline) { [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
-            if ($script:worker -or $script:session.tests[0].result -ne 'Unchanged' -or -not $script:session.tests[0].relatedEvents) { throw 'The UI did not complete the test and collect events.' }
+            if ($script:worker -or $script:session.tests[0].result -ne 'Unchanged' -or -not $script:session.tests[0].relatedEvents -or -not $script:session.tests[0].driverSnapshot) { throw 'The UI did not complete the test and collect events/drivers.' }
             $start.PerformClick(); $mark.PerformClick()
             $form.Close()
             $saved=Read-Session (Join-Path $script:sessionDirectory 'session.json')

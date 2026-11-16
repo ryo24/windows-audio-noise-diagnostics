@@ -87,6 +87,16 @@ try {
     $csv=Import-Csv -LiteralPath (Join-Path $directory 'tests.csv') -Encoding UTF8
     Assert-True ($csv.Count -eq 3 -and $csv[0].notes.StartsWith("'=")) 'CSV protects against formula injection and preserves rows'
     Assert-True ([int]$csv[0].noise_count -eq $loaded.tests[0].noiseUtc.Count) 'CSV and JSON agree on markers'
+    # Mock the external reads so the test checks orchestration and persistence, not this PC.
+    function Get-RelatedEvents { param($Start,$End); [pscustomobject]@{ events=@(); marker='fixture-events' } }
+    function Get-AudioDeviceInventory { param($Salt); [pscustomobject]@{ devices=@([pscustomobject]@{ name='fixture-audio'; driver=[pscustomobject]@{version='2.0'} }) } }
+    $evidence=Get-TestEvidence -Start ([DateTime]::UtcNow.AddMinutes(-10)) -End ([DateTime]::UtcNow) -Salt 'fixture' -IncludeDrivers
+    $powerTest | Add-Member -NotePropertyName driverSnapshot -NotePropertyValue $evidence.driverSnapshot
+    Save-Session $session $directory
+    $withSnapshot=Read-Session (Join-Path $directory 'session.json')
+    Assert-True ($withSnapshot.tests[1].driverSnapshot.audioDevices.data.devices[0].driver.version -eq '2.0') 'A changed driver snapshot survives session serialization'
+    $withoutDrivers=Get-TestEvidence -Start ([DateTime]::UtcNow) -End ([DateTime]::UtcNow) -Salt 'fixture'
+    Assert-True ($null -eq $withoutDrivers.driverSnapshot -and $withoutDrivers.relatedEvents.marker -eq 'fixture-events') 'Regular tests collect events without relabeling initial drivers as current'
     $source=Join-Path $temporary 'future.json'
     $future=$session | ConvertTo-Json -Depth 20 | ConvertFrom-Json
     $future.schemaVersion=999

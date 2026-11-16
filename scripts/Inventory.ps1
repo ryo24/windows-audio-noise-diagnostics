@@ -92,6 +92,16 @@ function Get-RelatedEvents {
     [pscustomobject]@{ startUtc=$Start.ToUniversalTime().ToString('o'); endUtc=$End.ToUniversalTime().ToString('o'); logs=$status.ToArray(); events=$records.ToArray(); note='各ログの最新500件までの重大・警告・エラーから関連プロバイダー名を抽出。メッセージ本文・ユーザー・マシン名・生イベントは保存しません。関連イベントなしは異常なしの証明ではありません。' }
 }
 
+function Get-TestEvidence {
+    param([DateTime]$Start, [DateTime]$End, [string]$Salt, [switch]$IncludeDrivers)
+    [pscustomobject]@{
+        relatedEvents=Get-RelatedEvents -Start $Start -End $End
+        driverSnapshot=if ($IncludeDrivers) {
+            [pscustomobject]@{ capturedUtc=[DateTime]::UtcNow.ToString('o'); audioDevices=Invoke-CollectionSection { Get-AudioDeviceInventory $Salt } }
+        } else { $null }
+    }
+}
+
 function Get-DiagnosticInventory {
     param([string]$Salt)
     [pscustomobject]@{

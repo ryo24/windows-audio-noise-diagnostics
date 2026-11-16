@@ -139,6 +139,9 @@ function Get-ReportHtml {
     }) -join "`n"
     $profileJson = ConvertTo-HtmlText ($Session.profile | ConvertTo-Json -Depth 8)
     $inventoryJson = ConvertTo-HtmlText ($Session.inventory | ConvertTo-Json -Depth 14)
+    $driverEvidenceHtml=(@($Session.tests | Where-Object { $null -ne $_.driverSnapshot } | ForEach-Object {
+        '<details><summary>ドライバー変更テストの再取得情報: ' + (ConvertTo-HtmlText $_.id) + '</summary><pre>' + (ConvertTo-HtmlText ($_.driverSnapshot | ConvertTo-Json -Depth 14)) + '</pre></details>'
+    })) -join "`n"
     $stamp = ConvertTo-HtmlText $Session.updatedUtc
     $identity = ConvertTo-HtmlText ($Session.tool.version + ' / ' + $Session.tool.commit)
     return @"
@@ -148,7 +151,7 @@ function Get-ReportHtml {
 <h2>確認結果と次の手順</h2>$assessments
 <h2>比較テストの記録</h2><p>時刻はUTC。ノイズ回数は手動ボタンの回数で、波形やノイズの自動検出ではありません。</p><div class="scroll"><table><thead><tr><th>ID / テスト</th><th>接続 / 電源 / アプリ</th><th>変更 / 備考 / 比較先</th><th>結果 / 観察時間</th><th>開始 / 終了 / ノイズ時刻</th><th>実行版</th></tr></thead><tbody>$tests</tbody></table></div>
 <h2>利用者が確認した情報</h2><pre>$profileJson</pre>
-<h2>自動取得した情報</h2><details><summary>PC・ドライバー・関連イベントの情報を開く</summary><pre>$inventoryJson</pre></details>
+<h2>自動取得した情報</h2><p>最初の情報はcapturedUtc時点の状態です。ドライバー変更テストでは終了時に音声デバイス情報を再取得し、別に保存します。</p><details><summary>初回取得のPC・ドライバー・関連イベントを開く</summary><pre>$inventoryJson</pre></details>$driverEvidenceHtml
 <h2>情報源と適用範囲</h2><article><ul>
 <li><a href="https://www.gmktec.com/pages/guides-how-to-tutorial">GMKtec公式FAQ</a>：再生時ノイズへのC-States無効化案内。今回の原因を確定する情報ではありません。</li>
 <li><a href="https://www.gmktec.com/pages/drivers-and-software">GMKtec公式配布元</a>：G3 / G3 Plus / G3 Proを取り違えず、実機の型番とハードウェアIDを照合してください。</li>
