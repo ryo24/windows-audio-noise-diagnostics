@@ -12,8 +12,8 @@ function Get-AnonymousDeviceRef {
 }
 
 function Get-DefaultEndpoint {
-    if (-not ('G3Audio.Endpoint' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'AudioEndpoint.cs') -ErrorAction Stop }
-    $info = [G3Audio.Endpoint]::Read()
+    if (-not ('AudioNoiseDiagnostics.Endpoint' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'AudioEndpoint.cs') -ErrorAction Stop }
+    $info = [AudioNoiseDiagnostics.Endpoint]::Read()
     $name = '未取得'
     if ($info.Id -match '(\{[0-9a-fA-F-]+\})$') {
         $properties = Get-ItemProperty -LiteralPath ('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render\' + $Matches[1] + '\Properties') -ErrorAction Stop

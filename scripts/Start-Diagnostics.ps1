@@ -101,7 +101,7 @@ function Set-TestPreset {
 }
 
 $form=New-Object Windows.Forms.Form
-$form.Text='G3 Plus 音声ノイズ調査'
+$form.Text='Windows Audio Noise Diagnostics'
 $form.Size=New-Object Drawing.Size(1120,940)
 $form.MinimumSize=New-Object Drawing.Size(960,800)
 $workArea=[Windows.Forms.Screen]::PrimaryScreen.WorkingArea
@@ -118,7 +118,7 @@ foreach ($height in @(56,42,158,48,0,42,48)) {
     [void]$layout.RowStyles.Add($style)
 }
 $form.Controls.Add($layout)
-$header=New-UiLabel ('G3 Plus  音声ノイズ調査  /  v' + (Get-ToolIdentity).version)
+$header=New-UiLabel ('Windows 音声ノイズ調査  /  v' + (Get-ToolIdentity).version)
 $header.Font=New-Object Drawing.Font('Yu Gothic UI',20,[Drawing.FontStyle]::Bold)
 $header.ForeColor=[Drawing.Color]::FromArgb(10,100,109)
 $layout.Controls.Add($header,0,0)
@@ -173,7 +173,7 @@ $start=New-UiButton 'テスト開始'; $mark=New-UiButton 'ノイズが聞こえ
 $mark.BackColor=[Drawing.Color]::FromArgb(14,112,120); $mark.ForeColor=[Drawing.Color]::White
 $elapsed=New-UiLabel '00:00 / ノイズ 0 回'
 $bottom.Controls.AddRange([Windows.Forms.Control[]]@($start,$mark,$finish,$skip,$elapsed)); $layout.Controls.Add($bottom,0,6)
-$status=New-Object Windows.Forms.ToolStripStatusLabel; $status.Text='オフラインで利用できます。更新はツールを閉じて「更新.cmd」から。'
+$status=New-Object Windows.Forms.ToolStripStatusLabel; $status.Text='オフラインで利用できます。更新はツールを閉じて update.cmd から。'
 $statusStrip=New-Object Windows.Forms.StatusStrip; [void]$statusStrip.Items.Add($status); $form.Controls.Add($statusStrip)
 
 $profilePath=Join-Path $script:dataRoot 'profile.json'

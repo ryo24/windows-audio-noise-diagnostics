@@ -1,7 +1,7 @@
 ﻿param([switch]$NoPause)
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
-$runner=Join-Path ([IO.Path]::GetTempPath()) ('g3-audio-update-' + [guid]::NewGuid().ToString('N') + '.ps1')
+$runner=Join-Path ([IO.Path]::GetTempPath()) ('audio-noise-update-' + [guid]::NewGuid().ToString('N') + '.ps1')
 $code=1
 try {
     [IO.File]::Copy((Join-Path $PSScriptRoot 'Update-Tool.ps1'),$runner)

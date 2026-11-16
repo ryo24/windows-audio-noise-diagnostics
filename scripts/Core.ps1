@@ -76,14 +76,21 @@ function New-TestRecord {
     }
 }
 
+function Test-GmktecSession {
+    param($Session)
+    return ([string]$Session.inventory.computer.data.manufacturer -match '(?i)GMKtec')
+}
+
 function Get-Assessment {
     param($Session)
     $items = New-Object 'System.Collections.Generic.List[object]'
     $items.Add([pscustomobject]@{ title='判定の前提'; text='ノイズ時刻は耳で確認して押した時刻です。通常ログや短時間の無発生だけでは、アナログ回路・給電・ドライバーの原因や解決を確定できません。テストは同じ素材・音量で一条件ずつ比較してください。' })
     if ($Session.profile.cStates -eq 'Disabled') {
         $items.Add([pscustomobject]@{ title='C-Statesは確認済み'; text='利用者の確認ではDisabledです。再変更を案内しません。SpeedStep、Speed Shiftなど、ほかのBIOS項目をまとめて変更する根拠もありません。' })
+    } elseif (Test-GmktecSession $Session) {
+        $items.Add([pscustomobject]@{ title='GMKtec機種向けの参考情報'; text='GMKtec公式FAQにC-States無効化の案内がありますが、今回の原因を示すものではありません。実機に適用する案内かを確認し、すでにDisabledなら変更不要です。BIOS更新や他項目の一括変更は行いません。' })
     } else {
-        $items.Add([pscustomobject]@{ title='C-Statesの記録'; text='GMKtec公式FAQに無効化の案内がありますが、今回の原因を示すものではありません。簡単な比較で未解決の場合に現状を確認し、すでにDisabledなら変更不要です。BIOS更新や他項目の一括変更は行いません。' })
+        $items.Add([pscustomobject]@{ title='BIOS設定は任意の記録'; text='C-Statesの確認・変更を調査の必須条件にはしません。実機メーカーが対象機種向けに案内している場合だけ確認してください。他社のBIOS手順をそのまま適用しません。' })
     }
     $complete = @($Session.tests | Where-Object { $_.result -notin @('InProgress','Interrupted','NotRun') })
     $baseline = @($complete | Where-Object { $_.kind -eq 'baseline35' -and @($_.noiseUtc).Count -gt 0 })
@@ -111,7 +118,7 @@ function Get-Assessment {
     if ($short.Count -gt 0) { $items.Add([pscustomobject]@{ title='観察時間が短い記録あり'; text='標準は各10分です。短い記録も保存しますが、無発生や改善の判断材料としては不足する場合があります。' }) }
     $conflict=@($complete | Where-Object { $_.result -eq 'NoRepro' -and @($_.noiseUtc).Count -gt 0 })
     if ($conflict.Count -gt 0) { $items.Add([pscustomobject]@{ title='結果とノイズ記録の食い違い'; text='「再現せず」を選んだテストにノイズボタンの記録があります。誤操作か結果の選択間違いかを確認し、備考を添えて再テストしてください。この記録を無発生の比較としては使いません。' }) }
-    $items.Add([pscustomobject]@{ title='未解決の場合'; text='機種・ハードウェアIDと合致するGMKtec公式ドライバーを確認します。合致する配布物がなければメーカーへ相談してください。通常ログだけでドライバー処理の遅延（DPC/ISR）を確定できないため、JSONを持ち帰って必要ならWindows Performance Recorder等の詳細調査を判断します。機種全体の設計不良とは断定できません。' })
+    $items.Add([pscustomobject]@{ title='未解決の場合'; text='PC・音声機器メーカーの公式配布元で、機種・ハードウェアIDと合致するドライバーを確認します。合致する配布物がなければメーカーへ相談してください。通常ログだけでドライバー処理の遅延（DPC/ISR）を確定できないため、JSONを持ち帰って必要ならWindows Performance Recorder等の詳細調査を判断します。機種全体の設計不良とは断定できません。' })
     return $items.ToArray()
 }
 
@@ -144,21 +151,28 @@ function Get-ReportHtml {
     })) -join "`n"
     $stamp = ConvertTo-HtmlText $Session.updatedUtc
     $identity = ConvertTo-HtmlText ($Session.tool.version + ' / ' + $Session.tool.commit)
+    $manufacturerSources=''
+    if (Test-GmktecSession $Session) {
+        $manufacturerSources=@'
+<details><summary>GMKtec機種向けの参考情報</summary><ul>
+<li><a href="https://www.gmktec.com/pages/guides-how-to-tutorial">GMKtec公式FAQ</a>：C-States無効化の案内。実機への適用可否を確認してください。</li>
+<li><a href="https://www.gmktec.com/pages/drivers-and-software">GMKtec公式配布元</a>：G3 / G3 Plus / G3 Proを取り違えず、型番とハードウェアIDを照合してください。</li>
+<li><a href="https://learn.microsoft.com/en-us/answers/questions/3926875/windows-11-usb-audio-and-hid-audio-cracking">Microsoft Q&amp;Aの利用者報告</a>：GMKtecの近縁機種の体験談。メーカーが検証した修正情報ではありません。</li>
+</ul></details>
+'@
+    }
     return @"
-<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>G3 Plus 音声調査報告書</title>
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Windows 音声ノイズ調査報告書</title>
 <style>body{font:16px/1.7 "Yu Gothic UI",sans-serif;color:#172c3c;background:#f3f6f8;margin:0}main{max-width:1200px;margin:auto;padding:32px}header{border-top:6px solid #137c80}h1{font-size:28px}h2{margin-top:36px}h3{font-size:18px;margin:0 0 8px}article,details{background:white;padding:20px;margin:12px 0;border:1px solid #d5e0e5;border-radius:8px}p{margin:0;white-space:pre-wrap}a{color:#086b74}table{border-collapse:collapse;background:white;width:100%;font-size:14px}th,td{border:1px solid #cbd9df;padding:12px;text-align:left;vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere}th{background:#e4eff1}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}.scroll{overflow:auto}.muted{color:#4c6473}.tag{color:#087277;font-weight:bold}@media print{main{padding:0}details{break-inside:avoid}table{font-size:11px}}</style></head><body><main>
-<header><p class="tag">G3 PLUS AUDIO DIAGNOSTICS</p><h1>音声ノイズ 調査報告書</h1><p class="muted">更新時刻（UTC）: $stamp<br>セッション作成時のツール: $identity<br>各テストの実行版は記録表を参照してください。</p></header>
+<header><p class="tag">WINDOWS AUDIO NOISE DIAGNOSTICS</p><h1>音声ノイズ 調査報告書</h1><p class="muted">更新時刻（UTC）: $stamp<br>セッション作成時のツール: $identity<br>各テストの実行版は記録表を参照してください。</p></header>
 <h2>確認結果と次の手順</h2>$assessments
 <h2>比較テストの記録</h2><p>時刻はUTC。ノイズ回数は手動ボタンの回数で、波形やノイズの自動検出ではありません。</p><div class="scroll"><table><thead><tr><th>ID / テスト</th><th>接続 / 電源 / アプリ</th><th>変更 / 備考 / 比較先</th><th>結果 / 観察時間</th><th>開始 / 終了 / ノイズ時刻</th><th>実行版</th></tr></thead><tbody>$tests</tbody></table></div>
 <h2>利用者が確認した情報</h2><pre>$profileJson</pre>
 <h2>自動取得した情報</h2><p>最初の情報はcapturedUtc時点の状態です。ドライバー変更テストでは終了時に音声デバイス情報を再取得し、別に保存します。</p><details><summary>初回取得のPC・ドライバー・関連イベントを開く</summary><pre>$inventoryJson</pre></details>$driverEvidenceHtml
 <h2>情報源と適用範囲</h2><article><ul>
-<li><a href="https://www.gmktec.com/pages/guides-how-to-tutorial">GMKtec公式FAQ</a>：再生時ノイズへのC-States無効化案内。今回の原因を確定する情報ではありません。</li>
-<li><a href="https://www.gmktec.com/pages/drivers-and-software">GMKtec公式配布元</a>：G3 / G3 Plus / G3 Proを取り違えず、実機の型番とハードウェアIDを照合してください。</li>
 <li><a href="https://support.microsoft.com/en-us/windows/hardware/audio/fix-distorted-or-crackling-audio-in-windows">Microsoft公式の音声対処手順</a>：音声拡張、形式、ドライバーの確認。</li>
-<li><a href="https://learn.microsoft.com/en-us/answers/questions/3926875/windows-11-usb-audio-and-hid-audio-cracking">Microsoft Q&amp;Aの利用者報告</a>：近縁機種の体験談。メーカーが検証したG3 Plusの修正情報ではありません。</li>
 <li><a href="https://learn.microsoft.com/en-us/windows-hardware/test/assessments/results-for-the-streaming-media-performance-assessment">Microsoftの音声グリッチ解析資料</a>：DPC/ISRなどの詳細解析が必要になる場合の参考。</li>
-</ul><p>調査情報の確認日：2026-11-16。公式ページの更新やBIOS・OSの違いにより、項目名や配布状況は変わります。</p></article>
+</ul><p>調査情報の確認日：2026-11-16。公式ページの更新やBIOS・OSの違いにより、項目名や配布状況は変わります。</p></article>$manufacturerSources
 <p class="muted">この報告書はローカルで生成されています。GitHubへの送信や音声録音は行いません。ログを他者へ渡す前に、自由入力欄やデバイス名に個人情報がないか確認してください。</p>
 </main></body></html>
 "@

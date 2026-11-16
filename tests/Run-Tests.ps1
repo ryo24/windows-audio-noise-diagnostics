@@ -46,7 +46,7 @@ try {
     }
     Assert-True ($parseErrors.Count -eq 0) 'All PowerShell files parse'
     Add-Type -Path (Join-Path $root 'scripts\AudioEndpoint.cs') -ErrorAction Stop
-    Assert-True ($null -ne ('G3Audio.Endpoint' -as [type])) 'Core Audio reader compiles'
+    Assert-True ($null -ne ('AudioNoiseDiagnostics.Endpoint' -as [type])) 'Core Audio reader compiles'
     $profile=[pscustomobject]@{ speakerModel='Test speaker'; powerSource='PCのUSB'; cStates='Disabled'; observations='<script>alert(1)</script>' }
     $session=New-DiagnosticSession $profile
     $directory=Join-Path $temporary 'session'
@@ -55,6 +55,13 @@ try {
     Assert-True (@($loaded.tests).Count -eq 0) 'An empty session can be resumed'
     $assessment=(Get-Assessment $loaded | ForEach-Object { $_.title + $_.text }) -join ' '
     Assert-True ($assessment.Contains('C-Statesは確認済み') -and $assessment.Contains('基準条件の再現記録が必要')) 'Disabled C-States skipped; missing baseline remains visible'
+    $loaded.profile.cStates='Unknown'
+    $genericAssessment=(Get-Assessment $loaded | ForEach-Object { $_.title + $_.text }) -join ' '
+    Assert-True ($genericAssessment.Contains('BIOS設定は任意の記録') -and -not $genericAssessment.Contains('GMKtec')) 'Unknown manufacturers receive generic guidance without vendor BIOS advice'
+    $loaded.inventory=[pscustomobject]@{ computer=[pscustomobject]@{ status='collected'; data=[pscustomobject]@{manufacturer='Other PC Vendor'} } }
+    Assert-True (-not (Get-ReportHtml $loaded).Contains('GMKtec')) 'Other vendors do not receive GMKtec-specific report sources'
+    $loaded.inventory.computer.data.manufacturer='GMKtec'
+    Assert-True ((Get-ReportHtml $loaded).Contains('GMKtec機種向けの参考情報')) 'Matching manufacturer exposes clearly labeled vendor references'
     $test=New-TestRecord 'baseline35' '3.5mm' 'PCのUSB' '<script>alert(1)</script>' 'baseline' '=HYPERLINK("https://example.invalid")'
     $test.result='Unchanged'; $test.durationSeconds=600; $test.endedUtc=[DateTime]::UtcNow.ToString('o'); $test.noiseUtc=@([DateTime]::UtcNow.ToString('o'))
     $session.tests=@($test)
