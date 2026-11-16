@@ -1,0 +1,9 @@
+/data/
+/test-output/
+/artifacts/
+*.tmp
+*.etl
+*.evtx
+*.dmp
+.DS_Store
+Thumbs.db
