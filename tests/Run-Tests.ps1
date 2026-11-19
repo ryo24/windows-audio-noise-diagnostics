@@ -116,6 +116,96 @@ try {
     $deviceRef=Get-AnonymousDeviceRef 'USB\VID_1234&PID_5678\PRIVATE_SERIAL' 'a'
     Assert-True ($deviceRef -notmatch 'PRIVATE' -and $deviceRef -ne (Get-AnonymousDeviceRef 'USB\VID_1234&PID_5678\PRIVATE_SERIAL' 'b')) 'Device references are anonymized per session'
 
+    & {
+        function Read-WinRtBluetoothRadios { [pscustomobject]@{state='On';radioStates=@('On')} }
+        function Read-WinRtPairedEndpoints {
+            param($Protocol)
+            @([pscustomobject]@{rawId=($Protocol + '\AA:BB:CC:DD:EE:FF');connected=$true},[pscustomobject]@{rawId=($Protocol+'\private-id');connected=$false})
+        }
+        $bt=Get-BluetoothState 'fixture-salt'
+        Assert-True ((Get-BluetoothStateSummary $bt).connectedEndpointCount -eq 2) 'Classic and LE connected flags are counted as endpoints, not device identities'
+        $serialized=$bt | ConvertTo-Json -Depth 15
+        Assert-True (-not $serialized.Contains('AA:BB:CC:DD:EE:FF') -and -not $serialized.Contains('private-id')) 'Bluetooth identifiers and MAC addresses never enter serialized endpoint data'
+        function Read-WinRtPairedEndpoints { param($Protocol); if ($Protocol -eq 'LE') { throw 'unavailable' }; [pscustomobject]@{rawId='fixture';connected=$null} }
+        $partialBt=Get-BluetoothState 'fixture-salt'
+        Assert-True ($partialBt.lowEnergy.status -eq 'unavailable' -and $null -eq (Get-BluetoothStateSummary $partialBt).connectedEndpointCount) 'Unavailable and unknown connection state never becomes zero connections'
+        $nullRadio=[pscustomobject]@{radio=[pscustomobject]@{status='collected';data=[pscustomobject]@{state='Unknown'}}}
+        Assert-True ((Get-BluetoothStateSummary $nullRadio).radioState -eq 'Unknown') 'An unexposed radio is not reported as off'
+    }
+    & {
+        function Get-WinEvent {
+            param($FilterHashtable,$MaxEvents,$ErrorAction)
+            @([pscustomobject]@{ProviderName='BTHUSB';Id=17;Level=3;TimeCreated=[DateTime]::UtcNow},[pscustomobject]@{ProviderName='Microsoft-Windows-Bluetooth-Policy';Id=18;Level=2;TimeCreated=[DateTime]::UtcNow},[pscustomobject]@{ProviderName='Unrelated';Id=99;Level=2;TimeCreated=[DateTime]::UtcNow})
+        }
+        # Restore the real reader locally, after an earlier fixture overrode it.
+        . (Join-Path $root 'scripts\Inventory.ps1')
+        $events=Get-RelatedEvents
+        Assert-True ($events.events.Count -eq 4 -and @($events.events | Where-Object { $_.provider -eq 'Unrelated' }).Count -eq 0) 'Bluetooth provider events are retained without unrelated events or raw messages'
+    }
+    & {
+        function Get-PnpDevice {
+            param([switch]$PresentOnly,$ErrorAction)
+            @([pscustomobject]@{InstanceId='USB\VID_1234&PID_ABCD\ADAPTER_SERIAL';Class='Bluetooth';FriendlyName='Private radio name';Status='OK'},[pscustomobject]@{InstanceId='BTHENUM\DEV_AABBCCDDEEFF\PRIVATE';Class='Bluetooth';FriendlyName='Private device AA:BB:CC:DD:EE:FF';Status='OK'},[pscustomobject]@{InstanceId='HID\private-bt-input';Class='Keyboard';FriendlyName='Private keyboard';Status='OK'},[pscustomobject]@{InstanceId='USB\private-wired';Class='Keyboard';FriendlyName='Wired keyboard';Status='OK'})
+        }
+        function Get-CimInstance {
+            param($ClassName,$OperationTimeoutSec,$ErrorAction)
+            [pscustomobject]@{DeviceID='USB\VID_1234&PID_ABCD\ADAPTER_SERIAL';DriverProviderName='Fixture vendor';DriverVersion='1.2.3';DriverDate=[DateTime]'2026-01-01';InfName='fixture.inf'}
+        }
+        function Get-PnpDeviceProperty {
+            param($InstanceId,$KeyName,$ErrorAction)
+            $parent=switch ($InstanceId) { 'HID\private-bt-input' {'BTHENUM\DEV_AABBCCDDEEFF\PRIVATE'}; 'BTHENUM\DEV_AABBCCDDEEFF\PRIVATE' {'USB\VID_1234&PID_ABCD\ADAPTER_SERIAL'}; default {$null} }
+            [pscustomobject]@{Data=$parent}
+        }
+        $pnpBt=Get-BluetoothDeviceInventory 'fixture'
+        $pnpJson=$pnpBt | ConvertTo-Json -Depth 12
+        Assert-True (@($pnpBt.devices | Where-Object { $_.role -eq 'adapter' -and $_.driver.version -eq '1.2.3' }).Count -eq 1 -and @($pnpBt.devices | Where-Object { $_.class -eq 'Keyboard' }).Count -eq 1) 'Bluetooth adapter drivers and related HID nodes are collected without unrelated wired keyboards'
+        Assert-True (-not $pnpJson.Contains('PRIVATE') -and -not $pnpJson.Contains('AA:BB:CC:DD:EE:FF') -and -not $pnpJson.Contains('ADAPTER_SERIAL')) 'Bluetooth PnP inventory excludes names, addresses and serials'
+    }
+    $btSession=New-DiagnosticSession $profile
+    $btOff=New-TestRecord 'btRadioOff' '3.5mm' 'PCのUSB' 'same player' 'off' ''
+    $btOff.result='NoRepro';$btOff.durationSeconds=600;$btOff.bluetoothCondition='RadioOff'
+    $offSnapshot=[pscustomobject]@{capturedUtc='2026-11-19T00:00:00.0000000Z';radio=[pscustomobject]@{status='collected';data=[pscustomobject]@{state='Off'}};classic=[pscustomobject]@{status='collected';data=[pscustomobject]@{knownConnectedCount=0;unknownConnectionCount=0}};lowEnergy=[pscustomobject]@{status='collected';data=[pscustomobject]@{knownConnectedCount=0;unknownConnectionCount=0}};durationMilliseconds=10}
+    $btOff.bluetoothSamples=@($offSnapshot)
+    $btOn=New-TestRecord 'btKeyboardTyping' '3.5mm' 'PCのUSB' 'same player' 'typing' ''
+    $btOn.result='Unchanged';$btOn.durationSeconds=600;$btOn.noiseUtc=@('2026-11-19T00:00:05.0000000Z');$btOn.bluetoothCondition='KeyboardConnected';$btOn.inputActivity='BluetoothTyping'
+    $onSnapshot=$offSnapshot | ConvertTo-Json -Depth 10 | ConvertFrom-Json
+    $onSnapshot.radio.data.state='On';$btOn.bluetoothSamples=@($onSnapshot)
+    $btSession.tests=@($btOff,$btOn)
+    $btAdvice=(Get-BluetoothAssessment $btSession | ForEach-Object { $_.title }) -join ' '
+    Assert-True ($btAdvice.Contains('Bluetooth状態に伴う差が候補')) 'Matched off/on reproduction produces a hypothesis, not a model-specific diagnosis'
+    $btOn.power='独立したUSB電源'
+    Assert-True (-not ((Get-BluetoothAssessment $btSession | ForEach-Object { $_.title }) -join ' ').Contains('Bluetooth状態に伴う差が候補')) 'Changed power conditions do not qualify as a controlled Bluetooth comparison'
+    $btOn.power='PCのUSB';$btOff.bluetoothSamples=@($onSnapshot)
+    $conflictAdvice=(Get-BluetoothAssessment $btSession | ForEach-Object { $_.title }) -join ' '
+    Assert-True ($conflictAdvice.Contains('Bluetooth条件と取得状態の食い違い') -and -not $conflictAdvice.Contains('Bluetooth状態に伴う差が候補')) 'Declared off versus observed on is exposed and cannot imply a controlled comparison'
+    $btOff.bluetoothSamples=@($offSnapshot)
+    $nearest=Get-NearestBluetoothObservation $btOn $btOn.noiseUtc[0]
+    Assert-True ($nearest.offsetSeconds -eq -5) 'Noise correlation reports the signed time gap instead of claiming simultaneous traffic'
+    Save-Session $btSession $directory
+    $btLoaded=Read-Session (Join-Path $directory 'session.json')
+    $btCsv=Import-Csv (Join-Path $directory 'bluetooth.csv') -Encoding UTF8
+    Assert-True ($btLoaded.tests[1].inputActivity -eq 'BluetoothTyping' -and $btCsv.Count -eq 2 -and $btCsv[0].radio_state -eq 'Off') 'Bluetooth conditions, samples and CSV round-trip without changing the schema'
+    Assert-True ((Get-ReportHtml $btLoaded).Contains('ノイズ発生瞬間の通信を測った値ではありません')) 'Reports disclose the limits of sampled connection state'
+    $fixtureInventory=Join-Path $temporary 'monitor-fixture.ps1'
+    Write-AtomicText $fixtureInventory 'function Get-BluetoothState { param($Salt); [pscustomobject]@{capturedUtc=[DateTime]::UtcNow.ToString("o");fixture=$true} }'
+    $monitor=Start-BluetoothMonitor -Salt 'fixture' -InventoryPath $fixtureInventory -IntervalSeconds 0 -MaxSamples 2
+    try {
+        $deadline=[DateTime]::UtcNow.AddSeconds(10)
+        while (-not $monitor.handle.IsCompleted -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 20 }
+        [void]$monitor.worker.EndInvoke($monitor.handle)
+        Assert-True ($monitor.queue.Count -eq 2) 'Background sampling enforces its cap and retains the final queued sample'
+    } finally { $monitor.worker.Dispose();$monitor.cancel.Dispose() }
+    $monitor=Start-BluetoothMonitor -Salt 'fixture' -InventoryPath $fixtureInventory -IntervalSeconds 10 -MaxSamples 720
+    try {
+        $deadline=[DateTime]::UtcNow.AddSeconds(10)
+        while ($monitor.queue.Count -eq 0 -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 20 }
+        [void]$monitor.cancel.Set()
+        $deadline=[DateTime]::UtcNow.AddSeconds(5)
+        while (-not $monitor.handle.IsCompleted -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 20 }
+        Assert-True ($monitor.handle.IsCompleted -and $monitor.queue.Count -eq 1) 'Stopping a test cancels the sampling wait without losing its first observation'
+        [void]$monitor.worker.EndInvoke($monitor.handle)
+    } finally { $monitor.worker.Dispose();$monitor.cancel.Dispose() }
+
     $remote=Join-Path $temporary 'remote.git'; $author=Join-Path $temporary 'author'; $client=Join-Path $temporary 'client'
     [IO.Directory]::CreateDirectory($remote) | Out-Null
     Invoke-TestGit $remote @('init','--bare','--initial-branch=main') | Out-Null

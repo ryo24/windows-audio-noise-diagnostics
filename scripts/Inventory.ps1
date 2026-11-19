@@ -1,4 +1,6 @@
-﻿function Invoke-CollectionSection {
+﻿. (Join-Path $PSScriptRoot 'Bluetooth.ps1')
+
+function Invoke-CollectionSection {
     param([scriptblock]$Read)
     try { [pscustomobject]@{ status='collected'; data=(& $Read); errorType=$null } }
     catch { [pscustomobject]@{ status='unavailable'; data=$null; errorType=$_.Exception.GetType().Name } }
@@ -79,7 +81,7 @@ function Get-RelatedEvents {
             $events = @(Get-WinEvent -FilterHashtable @{ LogName=$log; StartTime=$Start; EndTime=$End; Level=1,2,3 } -MaxEvents 500 -ErrorAction Stop)
             $scanCount = $events.Count
             foreach ($event in $events) {
-                if ($event.ProviderName -match 'Audio|USB|Kernel-PnP|DriverFrameworks|Kernel-Power|WHEA') {
+                if ($event.ProviderName -match 'Audio|USB|Kernel-PnP|DriverFrameworks|Kernel-Power|WHEA|Bluetooth|BTH|HidBth') {
                     $records.Add([pscustomobject]@{ log=$log; provider=$event.ProviderName; eventId=$event.Id; level=$event.Level; timeUtc=$event.TimeCreated.ToUniversalTime().ToString('o') })
                 }
             }
@@ -96,6 +98,7 @@ function Get-TestEvidence {
     param([DateTime]$Start, [DateTime]$End, [string]$Salt, [switch]$IncludeDrivers)
     [pscustomobject]@{
         relatedEvents=Get-RelatedEvents -Start $Start -End $End
+        bluetoothEndState=Get-BluetoothState $Salt
         driverSnapshot=if ($IncludeDrivers) {
             [pscustomobject]@{ capturedUtc=[DateTime]::UtcNow.ToString('o'); audioDevices=Invoke-CollectionSection { Get-AudioDeviceInventory $Salt } }
         } else { $null }
@@ -122,6 +125,8 @@ function Get-DiagnosticInventory {
         }
         defaultEndpoint=Invoke-CollectionSection { Get-DefaultEndpoint }
         audioDevices=Invoke-CollectionSection { Get-AudioDeviceInventory $Salt }
+        bluetoothState=Get-BluetoothState $Salt
+        bluetoothDevices=Invoke-CollectionSection { Get-BluetoothDeviceInventory $Salt }
         power=Invoke-CollectionSection {
             $raw=& powercfg.exe /getactivescheme
             if ($LASTEXITCODE -ne 0) { throw 'PowerPlanUnavailable' }

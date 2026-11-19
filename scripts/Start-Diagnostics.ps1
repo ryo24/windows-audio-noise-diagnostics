@@ -1,4 +1,4 @@
-﻿param([switch]$SmokeTest, [string]$ScreenshotPath, [switch]$ExerciseWorkflow)
+﻿param([switch]$SmokeTest, [string]$ScreenshotPath, [switch]$ExerciseWorkflow, [ValidateSet('Tests','Bluetooth')][string]$ScreenshotTab='Tests')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Core.ps1')
 . (Join-Path $PSScriptRoot 'Inventory.ps1')
@@ -19,6 +19,10 @@ $script:worker=$null
 $script:workerHandle=$null
 $script:workerMode=$null
 $script:closing=$false
+$script:bluetoothMonitor=$null
+$script:bluetoothTest=$null
+$script:btConditions=@('Unknown','RadioOff','RadioOnKeyboardOff','KeyboardConnected')
+$script:inputActivities=@('Unknown','WiredOnly','BluetoothIdle','BluetoothTyping')
 $script:definitions=@(Get-TestDefinitions)
 
 function New-UiLabel {
@@ -63,7 +67,7 @@ function Save-CurrentSession {
     }
 }
 function Update-UiState {
-    $busy=$null -ne $script:worker
+    $busy=($null -ne $script:worker -or $null -ne $script:bluetoothMonitor)
     $running=$null -ne $script:activeTest
     $collect.Enabled=(-not $busy -and -not $running)
     $resume.Enabled=(-not $busy -and -not $running)
@@ -71,9 +75,34 @@ function Update-UiState {
     $skip.Enabled=$start.Enabled
     $mark.Enabled=$running
     $finish.Enabled=$running
-    foreach ($control in @($testChoice,$outputChoice,$powerChoice,$appName,$changeText,$notes,$reference,$speaker,$profilePower,$cStates,$observations)) { $control.Enabled=(-not $busy -and -not $running) }
+    foreach ($control in @($testChoice,$outputChoice,$powerChoice,$appName,$changeText,$notes,$reference,$speaker,$profilePower,$cStates,$observations,$btCondition,$inputActivity,$btSampling)) { $control.Enabled=(-not $busy -and -not $running) }
     $report.Enabled=($null -ne $script:session)
     $folder.Enabled=($null -ne $script:session)
+}
+function Receive-BluetoothSamples {
+    if (-not $script:bluetoothMonitor) { return }
+    $completed=$script:bluetoothMonitor.handle.IsCompleted
+    $sample=$null; $changed=$false
+    while ($script:bluetoothMonitor.queue.TryDequeue([ref]$sample)) {
+        $script:bluetoothTest.bluetoothSamples=@($script:bluetoothTest.bluetoothSamples) + @($sample)
+        $summary=Get-BluetoothStateSummary $sample
+        $connections=if ($null -eq $summary.connectedEndpointCount) { '不明・一部未取得' } else { [string]$summary.connectedEndpointCount }
+        $btStatus.Text=('取得時刻（UTC）: ' + $sample.capturedUtc + "`r`n無線: " + $summary.radioState + ' ／ 接続エンドポイント数: ' + $connections + "`r`n接続中と入力中・通信量は別です。Classic/LEで同じ機器が重複する場合があります。")
+        $changed=$true
+    }
+    if ($completed) {
+        try { [void]$script:bluetoothMonitor.worker.EndInvoke($script:bluetoothMonitor.handle) }
+        catch { $script:bluetoothTest.bluetoothSampling.errorType=$_.Exception.GetType().Name }
+        $script:bluetoothTest.bluetoothSampling.endedUtc=[DateTime]::UtcNow.ToString('o')
+        $script:bluetoothTest.bluetoothSampling.limitReached=($btSampling.Checked -and @($script:bluetoothTest.bluetoothSamples).Count -ge $script:bluetoothMonitor.limit)
+        $script:bluetoothMonitor.worker.Dispose(); $script:bluetoothMonitor.cancel.Dispose(); $script:bluetoothMonitor=$null
+        $changed=$true; Update-UiState
+    }
+    if ($changed) {
+        if ($script:activeTest) { $script:activeTest.durationSeconds=[int]([DateTime]::UtcNow - [DateTime]::Parse($script:activeTest.startedUtc).ToUniversalTime()).TotalSeconds }
+        Save-CurrentSession
+    }
+    if ($script:closing -and -not $script:bluetoothMonitor -and -not $script:worker) { $form.Close() }
 }
 function Start-CollectionWorker {
     param([string]$Mode, [DateTime]$StartUtc=([DateTime]::UtcNow.AddHours(-24)), [DateTime]$EndUtc=([DateTime]::UtcNow))
@@ -96,7 +125,10 @@ function Set-TestPreset {
     $outputChoice.SelectedItem=$definition.output
     $powerChoice.SelectedItem=$definition.power
     $changeText.Text=$definition.change
+    $btCondition.SelectedIndex=[Math]::Max(0,[Array]::IndexOf($script:btConditions,$definition.btCondition))
+    $inputActivity.SelectedIndex=[Math]::Max(0,[Array]::IndexOf($script:inputActivities,$definition.inputActivity))
     $guide.Text=$definition.guide + "`r`n`r`n標準は10分。同じ素材と音量で比較し、一度に変える条件は一つにします。改善しない設定は元に戻します。機材や設定項目がなければ「未実施」を記録できます。"
+    if ($definition.id -like 'bt*') { $guide.Text += ' Bluetoothの手動条件と取得状態は隣のタブで確認できます。' }
     $notes.Text=''; $reference.Text=''
 }
 
@@ -147,7 +179,22 @@ $tabs=New-Object Windows.Forms.TabControl; $tabs.Dock='Fill'
 $testTab=New-Object Windows.Forms.TabPage; $testTab.Text='比較テスト'; $testTab.Padding=New-Object Windows.Forms.Padding(8)
 $historyTab=New-Object Windows.Forms.TabPage; $historyTab.Text='記録とテストID'
 $history=New-Object Windows.Forms.TextBox; $history.Multiline=$true; $history.ReadOnly=$true; $history.ScrollBars='Vertical'; $history.Dock='Fill'; $historyTab.Controls.Add($history)
-$tabs.TabPages.AddRange([Windows.Forms.TabPage[]]@($testTab,$historyTab)); $layout.Controls.Add($tabs,0,4)
+$btTab=New-Object Windows.Forms.TabPage; $btTab.Text='Bluetooth条件と取得状態'; $btTab.Padding=New-Object Windows.Forms.Padding(12)
+$btGrid=New-Object Windows.Forms.TableLayoutPanel; $btGrid.Dock='Fill'; $btGrid.ColumnCount=2; $btGrid.RowCount=5
+[void]$btGrid.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Absolute',190))); [void]$btGrid.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Percent',100)))
+foreach ($height in @(40,40,42,130,0)) { $s=New-Object Windows.Forms.RowStyle; if ($height -eq 0) { $s.SizeType='Percent'; $s.Height=100 } else { $s.SizeType='Absolute'; $s.Height=$height }; [void]$btGrid.RowStyles.Add($s) }
+$btCondition=New-UiCombo @('未確認','Bluetooth無線オフ','無線オン・BTキーボード電源オフ','BTキーボード接続')
+$inputActivity=New-UiCombo @('未確認','有線のみ使用','Bluetooth接続・待機','Bluetoothで入力中（手動申告）')
+$btSampling=New-Object Windows.Forms.CheckBox; $btSampling.Text='テスト中にBluetooth状態を約10秒間隔で記録（最大720回）'; $btSampling.Checked=$true; $btSampling.AutoSize=$true
+$btHelp=New-UiLabel "有線キーボードは全条件で接続したまま比較してください。音声出力・給電・素材・音量も維持します。`r`nBluetoothの切替はWindows設定で手動実施。ツールは切断や設定変更を行いません。`r`n上の条件は手動の記録です。Bluetooth状態の自動取得と区別します。`r`nキー内容・入力イベント・パケット・電波強度は取得しません。定期記録を外しても開始側の1回と終了後の状態は取得します。"
+$btHelp.Dock='Fill'; $btHelp.AutoSize=$false
+$btStatus=New-UiLabel 'テストを開始すると、取得できた無線と接続状態をここへ表示します。'; $btStatus.Dock='Fill'; $btStatus.AutoSize=$false
+$btGrid.Controls.Add((New-UiLabel 'Bluetooth条件（手動）'),0,0); $btGrid.Controls.Add($btCondition,1,0)
+$btGrid.Controls.Add((New-UiLabel '入力状況（手動）'),0,1); $btGrid.Controls.Add($inputActivity,1,1)
+$btGrid.Controls.Add($btSampling,0,2); $btGrid.SetColumnSpan($btSampling,2)
+$btGrid.Controls.Add($btHelp,0,3); $btGrid.SetColumnSpan($btHelp,2)
+$btGrid.Controls.Add($btStatus,0,4); $btGrid.SetColumnSpan($btStatus,2); $btTab.Controls.Add($btGrid)
+$tabs.TabPages.AddRange([Windows.Forms.TabPage[]]@($testTab,$btTab,$historyTab)); $layout.Controls.Add($tabs,0,4)
 $testGrid=New-Object Windows.Forms.TableLayoutPanel; $testGrid.Dock='Fill'; $testGrid.ColumnCount=2; $testGrid.RowCount=7
 [void]$testGrid.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Absolute',175)))
 [void]$testGrid.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Percent',100)))
@@ -221,9 +268,13 @@ $start.Add_Click({
         Write-AtomicText $profilePath ($script:session.profile | ConvertTo-Json -Depth 8)
         $test=New-TestRecord $script:definitions[$testChoice.SelectedIndex].id ([string]$outputChoice.SelectedItem) ([string]$powerChoice.SelectedItem) $appName.Text $changeText.Text $notes.Text $reference.Text.Trim()
         $test.defaultEndpoint=Invoke-CollectionSection { Get-DefaultEndpoint }
+        $test.bluetoothCondition=$script:btConditions[$btCondition.SelectedIndex]; $test.inputActivity=$script:inputActivities[$inputActivity.SelectedIndex]
+        $test.bluetoothSampling=[pscustomobject]@{ enabled=$btSampling.Checked; intervalSeconds=10; maxSamples=if ($btSampling.Checked) {720} else {1}; limitReached=$false; endedUtc=$null; errorType=$null }
         $script:session.tests=@($script:session.tests) + @($test)
         $script:activeTest=$test
         Save-CurrentSession
+        $script:bluetoothTest=$test
+        $script:bluetoothMonitor=Start-BluetoothMonitor -Salt $script:session.id -InventoryPath (Join-Path $PSScriptRoot 'Inventory.ps1') -MaxSamples $test.bluetoothSampling.maxSamples
         $status.Text='再生してノイズを確認してください。10分を目安に観察し、ノイズが聞こえたらボタンを押します。'
         Update-UiState
     } catch { Show-UiError $_.Exception.Message }
@@ -256,6 +307,7 @@ $finish.Add_Click({
         if ($answerForm.ShowDialog($form) -eq 'OK') {
             $test.result=@('NoRepro','Improved','Unchanged','Worse')[$answer.SelectedIndex]
             $test.notes=$endNotes.Text
+            if ($script:bluetoothMonitor) { [void]$script:bluetoothMonitor.cancel.Set() }
             $script:activeTest=$null
             Save-CurrentSession
             $script:eventsTest=$test
@@ -278,6 +330,7 @@ $folder.Add_Click({ try { Start-Process explorer.exe -ArgumentList ('"' + $scrip
 
 $timer=New-Object Windows.Forms.Timer; $timer.Interval=500
 $timer.Add_Tick({
+    try { Receive-BluetoothSamples } catch { $status.Text='Bluetooth記録の保存に失敗しました。'; Show-UiError $_.Exception.Message }
     if ($script:activeTest) {
         $seconds=[int]([DateTime]::UtcNow - [DateTime]::Parse($script:activeTest.startedUtc).ToUniversalTime()).TotalSeconds
         $elapsed.Text=('{0:00}:{1:00} / ノイズ {2} 回' -f [int][Math]::Floor($seconds/60),($seconds%60),@($script:activeTest.noiseUtc).Count)
@@ -290,6 +343,7 @@ $timer.Add_Tick({
             if ($script:workerMode -eq 'inventory') { $script:session.inventory=$value[0] }
             else {
                 $script:eventsTest | Add-Member -NotePropertyName relatedEvents -NotePropertyValue $value[0].relatedEvents -Force
+                $script:eventsTest | Add-Member -NotePropertyName bluetoothEndState -NotePropertyValue $value[0].bluetoothEndState -Force
                 if ($value[0].driverSnapshot) { $script:eventsTest | Add-Member -NotePropertyName driverSnapshot -NotePropertyValue $value[0].driverSnapshot -Force }
             }
             Save-CurrentSession
@@ -306,7 +360,12 @@ $form.Add_FormClosing({
             $script:activeTest.result='Interrupted'; $script:activeTest.endedUtc=[DateTime]::UtcNow.ToString('o')
             $script:activeTest.durationSeconds=[int]([DateTime]::UtcNow - [DateTime]::Parse($script:activeTest.startedUtc).ToUniversalTime()).TotalSeconds
             Save-CurrentSession
+            $script:activeTest=$null
         } catch { $eventArgs.Cancel=$true; Show-UiError $_.Exception.Message }
+    }
+    if ($script:bluetoothMonitor) {
+        [void]$script:bluetoothMonitor.cancel.Set(); $script:closing=$true; $eventArgs.Cancel=$true
+        $status.Text='Bluetoothの記録を保存してから閉じます。'
     }
 })
 try {
@@ -319,22 +378,29 @@ try {
             $collect.PerformClick()
             $timer.Start()
             $deadline=[DateTime]::UtcNow.AddSeconds(120)
-            while ($script:worker -and [DateTime]::UtcNow -lt $deadline) { [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
+            while (($script:worker -or $script:bluetoothMonitor) -and [DateTime]::UtcNow -lt $deadline) { [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
             if ($script:worker -or -not $script:session.inventory -or -not $start.Enabled) { throw 'The UI inventory workflow did not complete.' }
             $testChoice.SelectedIndex=7
-            $start.PerformClick(); $mark.PerformClick()
+            $start.PerformClick()
+            $deadline=[DateTime]::UtcNow.AddSeconds(20)
+            while (@($script:activeTest.bluetoothSamples).Count -eq 0 -and [DateTime]::UtcNow -lt $deadline) { [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
+            if (@($script:activeTest.bluetoothSamples).Count -eq 0) { throw 'No Bluetooth sample arrived in the UI.' }
+            $mark.PerformClick()
             if (@($script:activeTest.noiseUtc).Count -ne 1) { throw 'The UI did not save the marker.' }
             $finish.PerformClick()
             $deadline=[DateTime]::UtcNow.AddSeconds(45)
-            while ($script:worker -and [DateTime]::UtcNow -lt $deadline) { [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
-            if ($script:worker -or $script:session.tests[0].result -ne 'Unchanged' -or -not $script:session.tests[0].relatedEvents -or -not $script:session.tests[0].driverSnapshot) { throw 'The UI did not complete the test and collect events/drivers.' }
+            while (($script:worker -or $script:bluetoothMonitor) -and [DateTime]::UtcNow -lt $deadline) { [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
+            if ($script:worker -or $script:session.tests[0].result -ne 'Unchanged' -or -not $script:session.tests[0].relatedEvents -or -not $script:session.tests[0].driverSnapshot -or -not $script:session.tests[0].bluetoothEndState) { throw 'The UI did not complete the test and collect events/drivers/Bluetooth.' }
             $start.PerformClick(); $mark.PerformClick()
             $form.Close()
+            $deadline=[DateTime]::UtcNow.AddSeconds(30)
+            while ($script:bluetoothMonitor -and [DateTime]::UtcNow -lt $deadline) { [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
             $saved=Read-Session (Join-Path $script:sessionDirectory 'session.json')
             if ($saved.tests.Count -ne 2 -or $saved.tests[1].result -ne 'Interrupted' -or $saved.profile.cStates -ne 'Disabled') { throw 'The UI did not preserve the interrupted test/profile.' }
             Write-Output 'UI inventory, test completion, events, marker and interruption workflow OK'
         }
         if ($ScreenshotPath -and -not $ExerciseWorkflow) {
+            if ($ScreenshotTab -eq 'Bluetooth') { $tabs.SelectedTab=$btTab; [Windows.Forms.Application]::DoEvents() }
             [IO.Directory]::CreateDirectory((Split-Path -Parent ([IO.Path]::GetFullPath($ScreenshotPath)))) | Out-Null
             $bitmap=New-Object Drawing.Bitmap($form.Width,$form.Height)
             $form.DrawToBitmap($bitmap,(New-Object Drawing.Rectangle(0,0,$form.Width,$form.Height)))
@@ -344,5 +410,6 @@ try {
     } else { $timer.Start(); [Windows.Forms.Application]::Run($form) }
 } finally {
     $timer.Stop(); $timer.Dispose(); $form.Dispose()
+    if ($script:bluetoothMonitor) { [void]$script:bluetoothMonitor.cancel.Set(); $script:bluetoothMonitor.worker.Stop(); $script:bluetoothMonitor.worker.Dispose(); $script:bluetoothMonitor.cancel.Dispose() }
     if ($script:toolLock) { $script:toolLock.Dispose() }
 }
