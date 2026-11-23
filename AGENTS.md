@@ -4,7 +4,9 @@
 
 - 作業開始時に`git status`・現在のブランチ・リモートとの差分を確認する。開発・未公開の手順は`develop`に保存する。短い作業用ブランチは`develop`から`codex/...`で作り、取り込み先も`develop`とする。
 - `main`は他の利用者・別PCが`update.cmd`で受け取る配信版。未完成の作業を直接コミット・pushしない。公開対象を検証し、開発中の別件が混在していないことを確認してから`develop`→`main`のPRで配信する。開発の保存・pushと、利用者への配信を区別する。
+- 一部の変更だけmainへ先行配信する依頼では、mainから`codex/release-*`を作り、developで検証した該当コミットだけをcherry-pickしてmainへのPRにする。ブランチ保護とCIは維持し、配信後のmainをdevelopへ取り込む。未配信の別件をまとめて公開しない。
 - `update.cmd`は利用用のcleanな`main`クローン専用。開発フォルダーでmainへの自動切替、強制reset、未追跡ファイル削除を行わない。開発と配信確認は別クローンまたはworktreeを使い、調査データは保持する。
+- 開発版を使うコマンドは`start-develop.cmd`（更新して起動）と`update-develop.cmd`（更新のみ）。mainからは`data/develop-tool/`へ別クローンを用意し、develop上では現在のクローンを早送りする。利用者のブランチや記録を勝手に移動しない。
 - 手順・CI・main保護の規約は[開発と配信の運用](docs/development-workflow.md)。ブランチ移行のために公開履歴を書き換えたり、調査原本をdevelopへ追加したりしない。
 
 ## UIを変更するとき

@@ -17,8 +17,8 @@ jobs:
       - name: Check the release source
         shell: bash
         run: |
-          if [[ "$BASE_BRANCH" == main ]] && { [[ "$HEAD_BRANCH" != develop ]] || [[ "$HEAD_REPOSITORY" != "$TARGET_REPOSITORY" ]]; }; then
-            echo '::error::main receives verified releases from this repository develop branch. Open development pull requests against develop.'
+          if [[ "$BASE_BRANCH" == main ]] && { [[ "$HEAD_REPOSITORY" != "$TARGET_REPOSITORY" ]] || { [[ "$HEAD_BRANCH" != develop ]] && [[ "$HEAD_BRANCH" != codex/release-* ]]; }; }; then
+            echo '::error::main accepts verified develop releases or selected changes on a codex/release-* branch from this repository. Open ordinary development pull requests against develop.'
             exit 1
           fi
           echo 'Branch policy passed.'

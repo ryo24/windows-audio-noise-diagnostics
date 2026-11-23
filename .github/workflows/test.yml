@@ -10,6 +10,9 @@ jobs:
       - name: Test storage, guidance and Git updater
         shell: powershell
         run: .\tests\Run-Tests.ps1
+      - name: Test isolated development install, update and start
+        shell: powershell
+        run: .\tests\Run-DevelopLauncherTests.ps1
       - name: Build the Windows Forms interface
         shell: powershell
         run: .\scripts\Start-Diagnostics.ps1 -SmokeTest
