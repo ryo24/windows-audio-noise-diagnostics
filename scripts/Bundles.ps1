@@ -32,7 +32,7 @@ function Export-DiagnosticBundle {
         if($Expected -and $Expected -ne $hash){throw ('保存されたハッシュと一致しません: '+$Relative)}
         $files.Add([pscustomobject]@{path=('session/'+$Relative.Replace('\','/'));bytes=(Get-Item -LiteralPath $path).Length;sha256=$hash;source=$path});$paths[$Relative]=$true
     }
-    foreach($relative in @('session.json','report.html','tests.csv','bluetooth.csv','timeline.csv')){if(Test-Path -LiteralPath (Join-Path $SessionDirectory $relative)){& $addFile $relative}}
+    foreach($relative in @('session.json','report.html','tests.csv','bluetooth.csv','timeline.csv','network-diagnostics.json')){if(Test-Path -LiteralPath (Join-Path $SessionDirectory $relative)){& $addFile $relative}}
     foreach($probe in @($session.audioProbes)){
         foreach($kind in @('recording','reference')){if($probe.files.$kind){[void](Resolve-AudioFile $SessionDirectory $probe.files.$kind);& $addFile $probe.files.$kind $probe.files.($kind+'Sha256')}}
     }
@@ -48,7 +48,7 @@ function Export-DiagnosticBundle {
             if(Test-Path -LiteralPath $statePath){
                 Assert-RegularBundleFile $SessionDirectory $statePath
                 $state=Get-Content -LiteralPath $statePath -Raw -Encoding UTF8|ConvertFrom-Json
-                if($state.status -in @('Starting','Recording','Stopping')){throw '詳細トレースの保存完了を待ってから書き出してください。'}
+                if($state.status -in @('Launching','Starting','Recording','Stopping')){throw '詳細トレースの保存完了を待ってから書き出してください。'}
                 & $addFile ('traces/'+$trace.Name+'/trace.json')
             }
             $etl='traces/'+$trace.Name+'/trace.etl'

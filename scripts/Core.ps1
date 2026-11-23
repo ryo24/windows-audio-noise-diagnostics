@@ -239,6 +239,7 @@ function Get-ReportHtml {
     $bluetoothHtml=Get-BluetoothReportHtml $Session
     $audioHtml=Get-AudioReportHtml $Session
     $physicalHtml=Get-PhysicalReportHtml $Session
+    $networkHtml=Get-PhoneNetworkReportHtml $Session
     $reproductionHtml=Get-ReproductionReportHtml $Session
     $driverEvidenceHtml=(@($Session.tests | Where-Object { $null -ne $_.driverSnapshot } | ForEach-Object {
         '<details><summary>ドライバー変更テストの再取得情報: ' + (ConvertTo-HtmlText $_.id) + '</summary><pre>' + (ConvertTo-HtmlText ($_.driverSnapshot | ConvertTo-Json -Depth 14)) + '</pre></details>'
@@ -264,6 +265,7 @@ function Get-ReportHtml {
 $bluetoothHtml
 $audioHtml
 $physicalHtml
+$networkHtml
 $reproductionHtml
 <h2>利用者が確認した情報</h2><pre>$profileJson</pre>
 <h2>自動取得した情報</h2><p>最初の情報はcapturedUtc時点の状態です。v0.6以降は各テスト開始後にも構成を取得します。ドライバー変更テストでは終了後にも再取得します。</p><details><summary>初回取得のPC・ドライバー・関連イベントを開く</summary><pre>$inventoryJson</pre></details>$driverEvidenceHtml
@@ -310,6 +312,7 @@ function Save-Session {
         $timelineLines.Add((@($entry.id,$entry.kind,$entry.testId,$entry.probeId,$entry.utc,$entry.qpc,$entry.frequency,$entry.note)|ForEach-Object{ConvertTo-SafeCsvCell $_}) -join ',')
     }
     Write-AtomicText (Join-Path $Directory 'timeline.csv') ($timelineLines -join "`r`n") -Bom
+    if(@($Session.networkDiagnostics|Where-Object {$null -ne $_}).Count){Write-AtomicText (Join-Path $Directory 'network-diagnostics.json') (ConvertTo-Json -InputObject @($Session.networkDiagnostics) -Depth 20)}
     $html=Get-ReportHtml $Session
     $html=$html.Replace('</main>',((Get-TraceReportHtml $Directory)+'</main>'))
     Write-AtomicText (Join-Path $Directory 'report.html') $html

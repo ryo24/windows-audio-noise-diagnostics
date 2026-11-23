@@ -22,7 +22,7 @@ function Get-UiButtons {
     foreach($control in $Parent.Controls){if($control -is [Windows.Forms.Button]){$control};Get-UiButtons $control}
 }
 $form.Show();$form.PerformLayout();[Windows.Forms.Application]::DoEvents()
-$exercise=($ExerciseWorkflow -or $ExerciseAudioWorkflow -or $ExercisePhoneWorkflow -or $ExerciseExportWorkflow -or $ExerciseUxWorkflow)
+$exercise=($ExerciseWorkflow -or $ExerciseAudioWorkflow -or $ExercisePhoneWorkflow -or $ExerciseExportWorkflow -or $ExerciseUxWorkflow -or $ExerciseTraceWorkflow)
 Assert-Ui (-not $start.Enabled -and $tabs.SelectedTab -eq $preparePage) 'Startup must show preparation and refuse an unprepared start.'
 $buttons=@(Get-UiButtons $form)
 Assert-Ui (@($buttons|Where-Object {$_.Text -like '*調査を開始*'}).Count -eq 1) 'There must be exactly one observation/capture start button.'
@@ -38,6 +38,40 @@ if($exercise){
         Assert-Ui ($script:lastExport -and (Test-Path -LiteralPath $script:lastExport)) 'The export step did not produce a ZIP.'
         Assert-Ui ((Test-DiagnosticBundle $script:lastExport).manifest.sessionId -eq $script:session.id) 'Exported ZIP has the wrong session.'
         Write-Output 'UI export step creates and verifies a complete session ZIP OK'
+    }elseif($ExerciseTraceWorkflow){
+        function Start-TraceHelper {
+            param($Run)
+            $fixture=Join-Path $script:ToolRoot 'tests/Invoke-FakeTrace.ps1'
+            $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$fixture+'" -SessionPath "'+(Join-Path $script:sessionDirectory 'session.json')+'" -TraceId '+$Run.id
+            if($script:fakeTraceFailSave){$arguments+=' -FailSave'}
+            if($script:fakeTraceExit){$arguments+=' -ExitWithoutFinalState'}
+            if($script:fakeTraceHoldStart){$arguments+=' -WaitForRelease'}
+            Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -WindowStyle Hidden -ArgumentList $arguments -PassThru
+        }
+        $tabs.SelectedTab=$runPage;$runTools.SelectedTab=$traceTab;$traceConsent.Checked=$true
+        $prior=Join-Path (Join-Path $script:sessionDirectory 'traces') ([guid]::NewGuid().ToString('N'));[IO.Directory]::CreateDirectory($prior)|Out-Null
+        $script:fakeTraceHoldStart=$true;$traceStart.PerformClick()
+        Assert-Ui ((Test-DetailedTraceBusy) -and -not $traceStart.Enabled -and $script:traceRun.id) 'WPR launch must reserve the run directory before a helper is ready.'
+        $traceStop.PerformClick()
+        Assert-Ui ($script:traceRun.stopRequested -and -not $traceStop.Enabled -and (Test-Path -LiteralPath (Join-Path $script:traceRun.directory 'stop.request'))) 'An immediate stop must persist and disable duplicate stop requests.'
+        Assert-Ui (-not (Test-Path -LiteralPath (Join-Path $prior 'stop.request'))) 'Stopping must not alter historical trace directories.'
+        Write-AtomicText (Join-Path $script:traceRun.directory 'launch.release') 'release';$script:fakeTraceHoldStart=$false
+        Wait-Ui {-not (Test-DetailedTraceBusy)} 30
+        Assert-Ui ($script:traceRun.phase -eq 'Cancelled' -and -not (Test-Path -LiteralPath (Join-Path $script:traceRun.directory 'trace.etl'))) 'A stop before WPR startup must be cancelled explicitly, never reported as saved.'
+        $traceStart.PerformClick();Wait-Ui {$script:traceRun.phase -eq 'Recording'} 20;Save-UiProof 'wpr-recording'
+        $traceStop.PerformClick();Wait-Ui {$script:traceRun.phase -eq 'Saving'} 20
+        Assert-Ui (-not $traceStop.Enabled -and $traceStatus.Text.Contains('ETLを保存しています') -and $traceProgress.Visible) 'Acknowledged stop must show ETL saving separately from a request.'
+        Save-UiProof 'wpr-saving';Wait-Ui {-not (Test-DetailedTraceBusy)} 20
+        Assert-Ui ($script:traceRun.phase -eq 'Completed' -and $traceOpen.Enabled -and -not $traceStop.Enabled -and -not $traceProgress.Visible -and $traceStatus.Text.Contains('完了')) 'Completed manifest and ETL must update the UI even before process-exit polling.'
+        Save-UiProof 'wpr-completed'
+        $script:fakeTraceFailSave=$true;$traceStart.PerformClick();Wait-Ui {$script:traceRun.phase -eq 'Recording'} 20
+        $traceStop.PerformClick();Wait-Ui {-not (Test-DetailedTraceBusy)} 20
+        Assert-Ui ($script:traceRun.phase -eq 'Failed' -and $traceStatus.Text.Contains('StopFailed') -and $traceStatus.Text.Contains('25') -and $traceOpen.Enabled) 'WPR save failure must leave a visible result and exit code, not an endless stop request.'
+        Save-UiProof 'wpr-failed';$script:fakeTraceFailSave=$false;$script:fakeTraceExit=$true
+        $traceStart.PerformClick();Wait-Ui {-not (Test-DetailedTraceBusy)} 20
+        $state=Read-TraceRunState $script:traceRun
+        Assert-Ui ($script:traceRun.phase -eq 'Failed' -and $state.status -eq 'HelperExited' -and $state.helperExitCode -eq 9) 'Unexpected helper exit must release the UI and retain unconfirmed-stop metadata.'
+        Write-Output 'UI WPR early stop, cross-process state updates, saving/completion, save failure and helper crash OK'
     }elseif($ExercisePhoneWorkflow){
         $tabs.SelectedTab=$runPage;$runTools.SelectedTab=$phoneTab
         [void]$phoneAddress.Items.Add('127.0.0.1');$phoneAddress.SelectedIndex=0;Update-UiState;$phoneStart.PerformClick()
@@ -48,6 +82,9 @@ if($exercise){
         try{[void]$client.UploadData($script:phoneReceiver.Url+'upload','POST',[IO.File]::ReadAllBytes($fixture))}finally{$client.Dispose()}
         Wait-Ui {@($script:session.physicalRecordings).Count -eq 1} 15
         Assert-Ui (-not $collect.Enabled -and -not $resume.Enabled -and -not $export.Enabled) 'Reception must prevent changing sessions or exporting unfinished data.'
+        Save-UiProof 'phone-receiving'
+        $phoneDiagnose.PerformClick()
+        Assert-Ui (@($script:session.networkDiagnostics).Count -eq 1 -and $script:session.networkDiagnostics[0].localHttpSelfTest.httpStatus -eq 200) 'Phone connection diagnosis must persist a local self-test and receiver events without requiring a smartphone connection.'
         $tabs.SelectedTab=$reviewPage;$reviewTabs.SelectedTab=$physicalTab
         $physicalReviewed.Checked=$true;$physicalHeard.SelectedIndex=1;$physicalRoute.Text='Synthetic UI test';$physicalSave.PerformClick()
         $form.Close()
@@ -67,11 +104,18 @@ if($exercise){
         Wait-Ui {-not $script:activeTest -and -not $script:worker -and -not $script:bluetoothMonitor}
         Assert-Ui ($script:session.audioProbes[0].status -eq 'Completed' -and $tabs.SelectedTab -eq $reviewPage) 'Recording limit must end observation and advance to review automatically.'
         Assert-Ui ($script:session.tests[0].noiseUtc.Count -eq 1 -and $script:session.audioProbes[0].noiseMarkersUtc.Count -eq 1) 'The single marker must be associated with both records.'
-        Save-UiProof 'review';$audioReplay.PerformClick();Wait-Ui {-not $script:audioPlayback} 20
+        Save-UiProof 'review'
+        $script:reviewPromptChoice='ChangeOutput';$audioReplay.PerformClick()
+        Assert-Ui (-not $script:audioPlayback -and -not $script:session.audioProbes[0].verification.reviewPlaybackCompleted) 'Returning from the playback warning must not start playback or mark the recording reviewed.'
+        $script:reviewPromptChoice='Proceed';$audioReplay.PerformClick();Wait-Ui {-not $script:audioPlayback} 20
         Assert-Ui ($script:session.audioProbes[0].verification.reviewPlaybackCompleted) 'Saved WAV replay did not complete.'
+        Assert-Ui ([bool]$script:session.audioProbes[0].verification.playbackWarning.acceptedUtc) 'Continuing playback must retain acknowledgement without declaring the route clean.'
         $audioLive.SelectedIndex=1;$audioRecorded.SelectedIndex=2;$audioResemblance.SelectedIndex=2;$audioSaveReview.PerformClick()
         $saved=Read-Session (Join-Path $script:sessionDirectory 'session.json')
         Assert-Ui ($saved.audioProbes[0].verification.replayNoise -eq 'No') 'Listening verification was not saved.'
+        $previousReview=$script:session.audioProbes[0].verification|ConvertTo-Json -Depth 8
+        $script:reviewPromptChoice='ChangeOutput';$audioReplay.PerformClick()
+        Assert-Ui (-not $script:audioPlayback -and ($script:session.audioProbes[0].verification|ConvertTo-Json -Depth 8) -eq $previousReview) 'Returning from the warning must preserve an earlier saved listening result.'
         $audioMode.SelectedIndex=1
         Assert-Ui (-not $audioConsent.Checked -and -not $start.Enabled) 'Changing the recording method must require confirming its scope again.'
         $audioConsent.Checked=$true;$tabs.SelectedTab=$runPage;$start.PerformClick()

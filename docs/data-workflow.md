@@ -16,6 +16,7 @@ session/
   tests.csv
   bluetooth.csv
   timeline.csv               # UTC・QPC・テスト／録音IDつきの操作時刻
+  network-diagnostics.json   # 接続診断を明示的に保存した場合だけ（選択LAN内IPを含む）
   audio/<id>/*.wav            # 参照音声・内部録音・PCマイク録音
   physical/<id>/source.*      # スマートフォン等の元音声・動画
   traces/<id>/trace.json      # 詳細トレースの取得状態・時刻・終了コード
@@ -25,6 +26,8 @@ session/
 参照ファイルがない、または記録されたハッシュと違う場合は書き出しを止めます。生成後のZIPもハッシュで検証し、完了前のZIPは完成品として残しません。ハッシュは転送中の変化・原本との対応を確認するもので、送信者の本人性を認証する署名ではありません。
 
 詳細ETLはプロセス名・ファイルパス等を含み得るため、通常は除外し、除外ファイルを`bundle.json`に残します。必要な場合だけ**詳細ETLも含める**を選んで再出力します。音声・動画にも会話や周囲の映像が入るため、公開Issueへそのまま添付しないでください。
+
+スマホ接続の診断を保存すると、`session.json.networkDiagnostics`へ追記し、`network-diagnostics.json`にも同じ内容を出力します。正式な記録はsession.jsonです。選んだPCのLAN内IP・ポート、接続の分類、手動のエラー文等が通常ZIPに含まれるため、共有前に内容を確認してください。受付URL／トークン・受信元IP・Cookieは保存しません。解析ではPC内自己テスト、PC以外からの到達、HTTP応答を区別し、自己テストの成功だけでスマホの到達を判断しません。[接続診断の記録範囲](phone-connection-troubleshooting.md)を参照してください。
 
 ## 対象PCにエージェントがある場合
 

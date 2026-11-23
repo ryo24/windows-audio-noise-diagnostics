@@ -12,9 +12,10 @@
 }
 function Update-UiState {
     if(-not $script:uiReady){return}
+    $traceBusy=Test-DetailedTraceBusy
     $busy=($script:worker -or $script:bluetoothMonitor -or $script:audioRecorder -or $script:audioPlayback)
     $running=$null -ne $script:activeTest
-    $collect.Enabled=(-not $busy -and -not $running -and -not $script:traceProcess -and -not $script:phoneReceiver)
+    $collect.Enabled=(-not $busy -and -not $running -and -not $traceBusy -and -not $script:phoneReceiver)
     $resume.Enabled=$collect.Enabled
     $prepareNext.Enabled=($script:session -and -not $running -and -not $script:worker)
     $settingsNext.Enabled=[bool]$script:session;$reviewNext.Enabled=[bool]$script:session
@@ -26,10 +27,10 @@ function Update-UiState {
     if(-not $running){$elapsed.Text='待機中（未開始）'}
     foreach($control in @($testChoice,$outputChoice,$powerChoice,$appName,$changeText,$notes,$reference,$speaker,$profilePower,$cStates,$observations,$btCondition,$inputActivity,$btSampling,$material,$applicationOutput,$volume,$enhancements,$recentActions)){$control.Enabled=(-not $busy -and -not $running)}
     $report.Enabled=[bool]$script:session;$folder.Enabled=[bool]$script:session
-    $export.Enabled=($script:session -and -not $busy -and -not $running -and -not $script:phoneReceiver -and -not $script:traceProcess)
+    $export.Enabled=($script:session -and -not $busy -and -not $running -and -not $script:phoneReceiver -and -not $traceBusy)
     $includeTraces.Enabled=$export.Enabled
-    $traceStart.Enabled=($script:session -and $traceConsent.Checked -and -not $script:traceProcess -and -not $script:worker)
-    $traceStop.Enabled=[bool]$script:traceProcess
+    $traceStart.Enabled=($script:session -and $traceConsent.Checked -and -not $traceBusy -and -not $script:worker)
+    $traceStop.Enabled=($traceBusy -and -not $script:traceRun.stopRequested)
     $start.Text=@('テスト音声で調査を開始','アプリ音声の録音・調査を開始','録音せずに調査を開始')[$audioMode.SelectedIndex]
     $outputName=if($audioOutput.SelectedItem){$audioOutput.SelectedItem.Name}else{'未選択'}
     $sourceName=if($audioSource.SelectedIndex -eq 1){'マイク：'+$audioInput.SelectedItem.Name}else{'Windows内部の音'}
@@ -39,10 +40,10 @@ function Update-UiState {
     elseif($reason){$runInstruction.Text=$reason}
     else{$runInstruction.Text=if($audioMode.SelectedIndex -eq 2){'準備できました。下の開始ボタンを1回押してください。録音なしでは10分を目安に観察します。'}else{'準備できました。下の開始ボタンを1回押すと、録音・観察・状態記録が同時に始まります。'}}
     $workflowStatus.Text=if(-not $script:session){'まず「1 準備する」で調査を作成します。'}elseif($script:finishRequested){'調査を終了しています。保存完了後に結果を入力します。'}elseif($running){'調査中です。「3 調査する」でノイズを記録し、終了してください。'}elseif($script:worker -or $script:bluetoothMonitor){'情報の保存・取得中です。完了するまで次の調査とZIP書き出しは待ちます。'}elseif($tabs.SelectedTab -in @($settingsPage,$runPage) -and $reason){'次の操作：'+$reason}else{'記録は自動保存されます。条件を変えて次の調査、録音の聞き直し、またはZIP書き出しへ進めます。'}
-    if($script:traceProcess){$workflowStatus.Text+=' WPRの追加取得・保存中です。'}
+    if($traceBusy){$workflowStatus.Text+=' WPRの追加取得・保存中です。'}
     if($script:phoneReceiver){$workflowStatus.Text+=' スマホからの受信を受付中です。'}
-    $exportReady.Text=if(-not $script:session){'先に「1 準備する」で記録を作成してください。'}elseif($running -or $script:audioRecorder){'「3 調査する」で調査を終了し、結果を保存してください。'}elseif($script:phoneReceiver){'「3 調査する → スマホをつなぐ」で受信を閉じてください。'}elseif($script:traceProcess){'WPRの停止・保存を待ってください。'}elseif($busy){'情報の取得・保存、または聞き直しの終了を待ってください。'}else{'書き出せます。現在の調査のJSON・報告書・CSVと、関連する録音・動画をまとめます。'}
-    Update-AudioUi;Update-PhoneUi
+    $exportReady.Text=if(-not $script:session){'先に「1 準備する」で記録を作成してください。'}elseif($running -or $script:audioRecorder){'「3 調査する」で調査を終了し、結果を保存してください。'}elseif($script:phoneReceiver){'「3 調査する → スマホをつなぐ」で受信を閉じてください。'}elseif($traceBusy){'WPRの停止・保存を待ってください。'}elseif($busy){'情報の取得・保存、または聞き直しの終了を待ってください。'}else{'書き出せます。現在の調査のJSON・報告書・CSVと、関連する録音・動画をまとめます。'}
+    Update-AudioUi;Update-PhoneUi;Update-TraceUi
 }
 function Request-ObservationFinish {
     param($Point=(Get-ClockPoint))

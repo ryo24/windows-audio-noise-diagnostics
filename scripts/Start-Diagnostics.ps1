@@ -1,4 +1,4 @@
-﻿param([switch]$SmokeTest, [string]$ScreenshotPath, [switch]$ExerciseWorkflow, [switch]$ExerciseAudioWorkflow, [switch]$ExercisePhoneWorkflow, [switch]$ExerciseExportWorkflow, [switch]$ExerciseUxWorkflow, [ValidateSet('Prepare','Tests','Bluetooth','Audio','Phone','Evidence','Run','Review','Export')][string]$ScreenshotTab='Prepare')
+﻿param([switch]$SmokeTest, [string]$ScreenshotPath, [switch]$ExerciseWorkflow, [switch]$ExerciseAudioWorkflow, [switch]$ExercisePhoneWorkflow, [switch]$ExerciseExportWorkflow, [switch]$ExerciseUxWorkflow, [switch]$ExerciseTraceWorkflow, [ValidateSet('Prepare','Tests','Bluetooth','Audio','Phone','Evidence','Run','Review','Export')][string]$ScreenshotTab='Prepare')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Core.ps1')
 . (Join-Path $PSScriptRoot 'Inventory.ps1')
@@ -23,6 +23,8 @@ $script:workerHandle=$null
 $script:workerMode=$null
 $script:closing=$false
 $script:traceProcess=$null
+$script:traceRun=$null
+$script:tracePresentation=$null
 $script:uiReady=$false
 $script:finishRequested=$false
 $script:finishDialogOpen=$false
@@ -146,6 +148,7 @@ $collect.Add_Click({
         $profile=Get-CurrentProfile
         Write-AtomicText $profilePath ($profile | ConvertTo-Json -Depth 8)
         $script:session=New-DiagnosticSession $profile
+        Reset-EvidenceUiForSession
         $script:sessionDirectory=Join-Path (Join-Path $script:dataRoot 'sessions') $script:session.id
         Refresh-AudioRecords
         Refresh-PhysicalRecords
@@ -170,6 +173,7 @@ $resume.Add_Click({
             Import-SessionTraces (Split-Path -Parent $dialog.FileName) $script:sessionDirectory
             foreach($probe in @($loaded.audioProbes | Where-Object {$_.status -in @('Starting','Recording')})){$probe.status='Interrupted';$probe.verification.reviewPlaybackCompleted=$false;$probe.verification.notes+=' 録音が中断され、WAVが未確定の可能性があります。'}
             $script:session=$loaded
+            Reset-EvidenceUiForSession
             Set-ProfileControls $loaded.profile
             Save-CurrentSession
             Refresh-AudioRecords
@@ -243,7 +247,7 @@ $export.Add_Click({try{
 
 $timer=New-Object Windows.Forms.Timer; $timer.Interval=500
 $timer.Add_Tick({
-    Poll-DetailedTrace
+    try{Poll-DetailedTrace}catch{$traceStatus.Text='WPRの状態を確認できません。保存先のtrace.jsonを確認してください。'}
     try{Poll-PhoneReceiver}catch{$status.Text='スマートフォン記録の保存に失敗しました。';Show-UiError $_.Exception.Message}
     try{Poll-AudioJobs}catch{$status.Text='音声記録の保存に失敗しました。';Show-UiError $_.Exception.Message}
     if($script:closing -and -not $script:audioRecorder -and -not $script:audioPlayback -and -not $script:worker -and -not $script:bluetoothMonitor){$form.Close();return}
@@ -274,7 +278,7 @@ $timer.Add_Tick({
 })
 $form.Add_FormClosing({
     param($sender,$eventArgs)
-    if($script:traceProcess){Request-TraceStop;$eventArgs.Cancel=$true;$status.Text='詳細トレースを保存しています。終了してから閉じてください。';return}
+    if(Test-DetailedTraceBusy){Request-TraceStop;$eventArgs.Cancel=$true;$status.Text='詳細トレースを保存しています。終了してから閉じてください。';return}
     if($script:phoneReceiver){try{Stop-PhoneReceiver}catch{Show-UiError $_.Exception.Message;$eventArgs.Cancel=$true;return}}
     if($script:audioRecorder -or $script:audioPlayback){$script:finishRequested=$false;if($script:audioRecorder){$script:audioRecorder.Stop()};if($script:audioPlayback){$script:audioPlayback.Stop()};if($script:bluetoothMonitor){[void]$script:bluetoothMonitor.cancel.Set()};$script:closing=$true;$eventArgs.Cancel=$true;$status.Text='音声ファイルを確定してから閉じます。';return}
     if ($script:worker) { $eventArgs.Cancel=$true; if(-not $SmokeTest){[Windows.Forms.MessageBox]::Show('情報の取得中です。取得が終わってから閉じてください。','取得中') | Out-Null}; return }

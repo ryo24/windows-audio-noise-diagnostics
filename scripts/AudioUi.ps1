@@ -118,6 +118,10 @@ function Start-AudioReview {
         if(-not (Test-Path -LiteralPath $path)){throw '録音ファイルがありません。音声を含むZIPまたはセッション一式を確認してください。'}
         $expected=if($Kind -eq 'Reference'){$probe.files.referenceSha256}else{$probe.files.recordingSha256}
         if($expected -and (Get-FileHash -LiteralPath $path).Hash -ne $expected){throw '録音のハッシュが一致しません。'}
+        $outputRef=Get-AnonymousDeviceRef ('SWD\MMDEVAPI\'+$reviewOutput.SelectedItem.Id) $script:session.id
+        $notice=Get-PlaybackReviewNotice $probe $reviewOutput.SelectedItem.Name $outputRef
+        if(-not (Confirm-PlaybackReview $notice)){$audioStatus.Text='再生を開始していません。ノイズの出ない出力を「② 聞き直す出力」で選び直してください。';return}
+        $probe.verification|Add-Member -NotePropertyName playbackWarning -NotePropertyValue ([pscustomobject]@{acceptedUtc=[DateTime]::UtcNow.ToString('o');relation=$notice.relation;outputRef=$outputRef;scope='再生経路の影響を了承した操作。正常な出力と確認済みであることは意味しません。'}) -Force
         $script:playbackProbe=$probe;$script:playbackKind=$Kind
         if($Kind -eq 'Recording'){$probe.verification.reviewPlaybackCompleted=$false;$probe.verification.reviewEndpointName=$reviewOutput.SelectedItem.Name;$probe.verification.reviewStartedUtc=[DateTime]::UtcNow.ToString('o');$probe.verification.replayNoise='Unreviewed';$probe.verification.resemblance='Unreviewed'}
         $script:audioPlayback=[AudioNoiseDiagnostics.AudioPlayback]::Start($reviewOutput.SelectedItem.Id,$path);Update-UiState

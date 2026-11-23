@@ -10,6 +10,8 @@ Windows PCで、再生中の音声ノイズを接続・給電・Bluetooth入力�
 
 PCに挿したマイクや、QRで接続したスマートフォンから実音を取り込む場合は、[マイク・スマートフォンで記録する手順](docs/physical-capture.md)を参照してください。Cloudflareや外部の受信サーバーを使わず、同じLAN内で受け取れます。
 
+PCが有線LAN・スマホがWi-Fiでも利用できます。QRのページを開けない場合は、[Android／Firefoxの接続診断](docs/phone-connection-troubleshooting.md)を参照してください。アプリから接続診断を保存してZIPに含められます。接続せず、スマホで撮った動画をUSBでPCへコピーして取り込む方法も使えます。
+
 ## 最初の起動
 
 対象PCに [Git for Windows](https://git-scm.com/downloads/win) がある状態で、PowerShellまたはコマンドプロンプトで実行します。
@@ -130,7 +132,7 @@ inboxとimportsの原本は編集せず、解析結果はanalysisへ保存しま
 
 CSV・JSON・報告書の時刻はUTCです。日本時間は9時間を加算してください。v0.6以降は観察時間をQPCでも記録し、UTC差との食い違いを残します。CSVの自由入力はExcelの数式として評価されないよう処理します。
 
-データを自動送信しません。音声録音・スマートフォンの取り込みは、対象の音声・映像を確認して明示的に操作した場合だけ行います。閲覧履歴、ユーザー名、PC名、シリアル番号、IP/MACアドレスは調査ログへ保存しません（LAN受付では接続先のローカルIPを画面表示します）。デバイスのインスタンスIDはセッションごとに匿名化し、ドライバー照合には機種・製品を示すハードウェアIDを保存します。Bluetooth機器の名前・MACアドレス・生の機器IDは保存せず、匿名IDと接続状態を保存します。イベント本文は保存せず、関連するプロバイダー・ID・レベル・時刻だけを残します。
+データを自動送信しません。音声録音・スマートフォンの取り込みは、対象の音声・映像を確認して明示的に操作した場合だけ行います。通常の音声調査ログへ閲覧履歴、ユーザー名、PC名、シリアル番号、IP/MACアドレスは保存しません。**「接続診断を保存」で保存を選んだ場合だけ、選択したPCのLAN内IPv4・ポート、接続分類、ブラウザー系統・メジャー版等を記録とZIPへ含めます。** 受信元IP・MAC・SSID・受付URL／トークン・Cookie・全User-Agentは保存しません。[記録範囲の詳細](docs/phone-connection-troubleshooting.md)を確認してください。デバイスのインスタンスIDはセッションごとに匿名化し、ドライバー照合には機種・製品を示すハードウェアIDを保存します。Bluetooth機器の名前・MACアドレス・生の機器IDは保存せず、匿名IDと接続状態を保存します。イベント本文は保存せず、関連するプロバイダー・ID・レベル・時刻だけを残します。
 
 再生セッションにはプロセスIDと実行ファイルの名前を保存します。通常ログにウィンドウタイトル・コマンドライン・実行ファイルのフルパスは保存しません。詳細ETLはそれより広いシステム情報を含み得るため、明示的な取得と書き出しの選択を必要とします。
 
@@ -172,7 +174,9 @@ UIの構成・操作・状態遷移を変更する前に、[UI設計の方針](d
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-Tests.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-DataTests.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-IntegrationTests.ps1
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\scripts\Start-Diagnostics.ps1 -SmokeTest
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\scripts\Start-Diagnostics.ps1 -SmokeTest -ExerciseTraceWorkflow
 ```
 
 テストは架空の情報と一時的なローカルGitリポジトリを使います。実機の設定を変更せず、データ・判定・保存と更新の保護動作を確認します。Run-DataTestsは音声出力がある場合に短い小音量の合成音で再生先の対応も確認し、WPRは偽コマンドで失敗処理を検証します。互換性のある項目追加ではJSONの形式番号を維持し、破壊的な変更では形式番号と旧ログの読み込み処理を更新してください。`main`への公開前にテストを通し、`VERSION`を更新してください。
