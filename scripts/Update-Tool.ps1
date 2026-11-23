@@ -11,7 +11,7 @@ try {
     try { $lock=[IO.File]::Open((Join-Path $data 'tool.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) }
     catch { throw '調査ツールが起動中です。ツールを閉じてから更新してください。' }
     $branch=& git -C $root branch --show-current
-    if ($LASTEXITCODE -ne 0 -or $branch -ne 'main') { throw 'mainブランチではありません。変更を確認してmainへ戻してから更新してください。' }
+    if ($LASTEXITCODE -ne 0 -or $branch -ne 'main') { throw 'このフォルダーは配信用のmainブランチではありません。開発はdevelopのまま続け、利用・配信確認には別フォルダーへmainをクローンしてください。ブランチの自動切替や変更の削除は行いません。' }
     $dirty=@(& git -C $root status --porcelain --untracked-files=normal)
     if ($LASTEXITCODE -ne 0) { throw 'Gitの状態を取得できませんでした。' }
     if ($dirty.Count -gt 0) { throw 'コードの変更または未追跡ファイルがあります。上書きせず停止しました。変更を退避・コミットするか別フォルダーへ新規クローンしてください。data内の記録はそのまま保持してください。' }

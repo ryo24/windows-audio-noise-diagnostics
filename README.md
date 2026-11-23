@@ -17,7 +17,7 @@ PCが有線LAN・スマホがWi-Fiでも利用できます。QRのページを�
 対象PCに [Git for Windows](https://git-scm.com/downloads/win) がある状態で、PowerShellまたはコマンドプロンプトで実行します。
 
 ```powershell
-git clone https://github.com/ryo24/windows-audio-noise-diagnostics.git
+git clone --branch main --single-branch https://github.com/ryo24/windows-audio-noise-diagnostics.git
 cd windows-audio-noise-diagnostics
 .\start.cmd
 ```
@@ -90,6 +90,7 @@ Bluetoothキーボードから有線へ替えてノイズが止まった場合�
 ```
 
 - `origin` の `main` を取得し、早送りできる場合だけ更新します。
+- `develop`や作業用ブランチでは更新せず停止します。開発途中の変更を利用者へ配信しません。
 - ローカルのコード変更、未追跡ファイル、未公開コミット、履歴分岐があれば、強制上書きせず停止します。
 - 通信に失敗しても手元のコードと調査記録を保持します。通常の起動では更新確認も通信も行いません。
 - 更新処理は一時コピーから実行し、更新スクリプト自身の更新にも対応します。
@@ -168,6 +169,8 @@ CSV・JSON・報告書の時刻はUTCです。日本時間は9時間を加算し
 本プロジェクトは非公式で、PC・音声機器メーカーやMicrosoftの提供物ではありません。メーカーのドライバーやBIOSは再配布しません。
 
 ## 開発と検証
+
+**利用・配信は`main`、開発・未公開の変更は`develop`**を使います。利用者用のフォルダーではコードを編集せず、開発は別フォルダーで行ってください。開発の保存・PR・配信・既存の未追跡ファイルの扱いは[開発と配信の運用](docs/development-workflow.md)を参照してください。`develop`へのpushだけでは`update.cmd`の配信内容は変わりません。
 
 UIの構成・操作・状態遷移を変更する前に、[UI設計の方針](docs/ui-design-policy.md)を参照してください。設計上の判断基準と変更時の確認項目をまとめています。利用者向けの手順は[操作ガイド](docs/user-guide.md)です。
 

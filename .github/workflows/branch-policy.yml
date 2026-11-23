@@ -1,0 +1,24 @@
+name: Branch policy
+on:
+  pull_request:
+    branches: [main, develop]
+permissions:
+  contents: read
+jobs:
+  branch-policy:
+    name: Branch policy
+    runs-on: ubuntu-latest
+    env:
+      BASE_BRANCH: ${{ github.base_ref }}
+      HEAD_BRANCH: ${{ github.head_ref }}
+      HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+      TARGET_REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Check the release source
+        shell: bash
+        run: |
+          if [[ "$BASE_BRANCH" == main ]] && { [[ "$HEAD_BRANCH" != develop ]] || [[ "$HEAD_REPOSITORY" != "$TARGET_REPOSITORY" ]]; }; then
+            echo '::error::main receives verified releases from this repository develop branch. Open development pull requests against develop.'
+            exit 1
+          fi
+          echo 'Branch policy passed.'

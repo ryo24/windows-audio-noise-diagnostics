@@ -340,6 +340,15 @@ try {
     Assert-True ($update.code -eq 0) 'Already-current updates succeed'
     $update=Invoke-Updater $client (Join-Path $client 'scripts\Launch-Update.ps1')
     Assert-True ($update.code -eq 0) 'Detached bootstrap launches from a Japanese path with an apostrophe'
+    Invoke-TestGit $client @('switch','-c','develop') | Out-Null
+    $head=Invoke-TestGit $client @('rev-parse','HEAD')
+    $update=Invoke-Updater $client (Join-Path $client 'scripts\Launch-Update.ps1')
+    Assert-True ($update.code -ne 0 -and (Invoke-TestGit $client @('branch','--show-current')) -eq 'develop' -and (Invoke-TestGit $client @('rev-parse','HEAD')) -eq $head) 'Distribution updater refuses develop without switching branches or changing HEAD'
+    Assert-True ([IO.File]::ReadAllText($privateLog) -eq 'private fixture') 'Refusing a development checkout preserves diagnostic data'
+    Invoke-TestGit $client @('switch','-c','codex/fixture') | Out-Null
+    $update=Invoke-Updater $client
+    Assert-True ($update.code -ne 0 -and (Invoke-TestGit $client @('branch','--show-current')) -eq 'codex/fixture') 'Distribution updater also preserves a feature branch'
+    Invoke-TestGit $client @('switch','main') | Out-Null
     [IO.File]::WriteAllText((Join-Path $client 'version.txt'),'local edit')
     $update=Invoke-Updater $client
     Assert-True ($update.code -ne 0 -and [IO.File]::ReadAllText((Join-Path $client 'version.txt')) -eq 'local edit') 'Tracked local changes are never overwritten'
