@@ -155,11 +155,60 @@ try {
     Assert-True ($blocked) 'Audio paths cannot escape their session directory'
     $probeRecord.status='NoAudioData'
     Assert-True ((Get-AudioReportHtml $probeSession).Contains('ノイズなしとは判定できません')) 'No loopback packets cannot be interpreted as clean output'
+    $probeRecord.status='Completed';$probeRecord.sourceKind='Microphone';$probeRecord.inputEndpointName='Fixture microphone';$probeRecord.verification.replayNoise='No'
+    Assert-True ((Get-AudioReportHtml $probeSession).Contains('マイクの距離・感度・音声処理')) 'Microphone discrepancies are assessed as physical-input evidence, not loopback evidence'
     $externalRecord=New-AudioProbeRecord 'ExternalApp' 'Fixture' '' 60
     Assert-True ($null -eq $externalRecord.files.reference -and $null -eq $externalRecord.referenceId) 'External application recording does not schedule a reference tone'
     Save-Session $probeSession $audioRoot
     $savedProbe=Read-Session (Join-Path $audioRoot 'session.json')
     Assert-True ($savedProbe.audioProbes[0].verification.liveNoise -eq 'Yes' -and $savedProbe.audioProbes[0].files.recordingSha256 -eq $probeRecord.files.recordingSha256) 'Audio capture and independent listening results round-trip in a compatible session log'
+
+    Initialize-LocalReceiver
+    Assert-True ([AudioNoiseDiagnostics.LocalReceiver]::IsLocalAddress('192.168.1.20') -and [AudioNoiseDiagnostics.LocalReceiver]::IsLocalAddress('10.0.0.2') -and -not [AudioNoiseDiagnostics.LocalReceiver]::IsLocalAddress('0.0.0.0') -and -not [AudioNoiseDiagnostics.LocalReceiver]::IsLocalAddress('8.8.8.8')) 'Phone receiver binds only a selected private IPv4 or loopback address'
+    $phoneRoot=Join-Path $temporary 'phone-session'
+    $receiver=[AudioNoiseDiagnostics.LocalReceiver]::Start('127.0.0.1',$phoneRoot,(Join-Path $root 'web'),30)
+    $webClient=New-Object Net.WebClient
+    try {
+        $page=$webClient.DownloadString($receiver.Url)
+        Assert-True ($page.Contains('capture="environment"') -and $page.Contains('capture="user"')) 'LAN page offers native audio/video capture and file selection'
+        $qrPage=$webClient.DownloadString($receiver.Url+'pc')
+        Assert-True ($qrPage.Contains('qrcode.min.js') -and -not $qrPage.Contains('https://')) 'QR page loads its code locally without an external QR service or CDN'
+        $blocked=$false;try{$webClient.DownloadString(([Uri]$receiver.Url).GetLeftPart([UriPartial]::Authority)+'/s/wrong-token/')|Out-Null}catch{$blocked=$true}
+        Assert-True ($blocked) 'A missing or wrong pairing token cannot access the receiver'
+        $webClient.Headers['Origin']='https://unrelated.invalid'
+        $blocked=$false;try{$webClient.UploadData($receiver.Url+'upload','POST',[IO.File]::ReadAllBytes($reference))|Out-Null}catch{$blocked=$true}
+        Assert-True ($blocked -and $receiver.AcceptedCount -eq 0) 'Cross-origin uploads are refused before saving media'
+        $webClient.Headers.Clear();$webClient.Headers['Content-Type']='application/octet-stream'
+        $webClient.Headers['X-Preview-Confirmed']='true';$webClient.Headers['X-Heard-Noise']='Yes';$webClient.Headers['X-Note']=[Uri]::EscapeDataString('スマートフォンの確認')
+        $response=[Text.Encoding]::UTF8.GetString($webClient.UploadData($receiver.Url+'upload','POST',[IO.File]::ReadAllBytes($reference)))|ConvertFrom-Json
+        $received=$null;$taken=$receiver.Received.TryDequeue([ref]$received)
+        Assert-True ($response.received -and $taken -and $received.PreviewConfirmed -and $received.HeardNoise -eq 'Yes' -and $received.Note -eq 'スマートフォンの確認') 'Local upload preserves preview observations and UTF-8 notes'
+        $physical=ConvertTo-PhysicalRecord $received $probeRecord.id 'fixture-test'
+        $uploaded=Resolve-PhysicalMediaFile $phoneRoot $physical.file.path
+        Assert-True ((Get-FileHash -LiteralPath $uploaded).Hash -eq (Get-FileHash -LiteralPath $reference).Hash) 'Phone uploads preserve the exact original bytes and hash'
+        Assert-True (-not ($physical|ConvertTo-Json -Depth 10).Contains($receiver.Url)) 'Pairing URLs and tokens do not enter saved diagnostic metadata'
+        $blocked=$false;try{$webClient.UploadData($receiver.Url+'upload','POST',[Text.Encoding]::UTF8.GetBytes('not an audio or video recording'))|Out-Null}catch{$blocked=$true}
+        Assert-True ($blocked -and $receiver.AcceptedCount -eq 1) 'Unsupported content is rejected without pretending it is valid media'
+        $blocked=$false;try{$webClient.DownloadString($receiver.Url+'../session.json')|Out-Null}catch{$blocked=$true}
+        Assert-True ($blocked) 'Receiver routes never expose arbitrary session files'
+        $tcp=New-Object Net.Sockets.TcpClient('127.0.0.1',$receiver.Port)
+        try{$tcp.ReceiveTimeout=3000;$stream=$tcp.GetStream();$request='POST '+([Uri]$receiver.Url).AbsolutePath+"upload HTTP/1.1`r`nHost: "+([Uri]$receiver.Url).Authority+"`r`nContent-Length: 134217729`r`n`r`n";$bytes=[Text.Encoding]::ASCII.GetBytes($request);$stream.Write($bytes,0,$bytes.Length);$reader=New-Object IO.StreamReader($stream);$result=$reader.ReadToEnd();Assert-True ($result.StartsWith('HTTP/1.1 413')) 'Oversized uploads are rejected before reading or allocating the body'}finally{$tcp.Dispose()}
+        $tcp=New-Object Net.Sockets.TcpClient('127.0.0.1',$receiver.Port)
+        try{$tcp.ReceiveTimeout=3000;$stream=$tcp.GetStream();$request='GET '+([Uri]$receiver.Url).AbsolutePath+" HTTP/1.1`r`nHost: different.example`r`n`r`n";$bytes=[Text.Encoding]::ASCII.GetBytes($request);$stream.Write($bytes,0,$bytes.Length);$reader=New-Object IO.StreamReader($stream);Assert-True ($reader.ReadToEnd().StartsWith('HTTP/1.1 400')) 'Unexpected Host headers cannot reuse the pairing token'}finally{$tcp.Dispose()}
+        $physicalSession=New-DiagnosticSession $profile;$physicalSession.physicalRecordings=@($physical)
+        $physicalSessionDirectory=Join-Path $temporary 'phone-import'
+        Import-PhysicalFiles $physicalSession $phoneRoot $physicalSessionDirectory
+        Assert-True ((Get-FileHash -LiteralPath (Resolve-PhysicalMediaFile $physicalSessionDirectory $physical.file.path)).Hash -eq $physical.file.sha256) 'Physical recording files are included when importing a session'
+        $physical.verification.replayedManually=$true;$physical.verification.heardNoise='Yes';$physical.verification.playbackRoute='<script>unsafe</script>'
+        Save-Session $physicalSession $physicalSessionDirectory
+        $physicalLoaded=Read-Session (Join-Path $physicalSessionDirectory 'session.json')
+        Assert-True ($physicalLoaded.physicalRecordings[0].verification.heardNoise -eq 'Yes' -and -not (Get-PhysicalReportHtml $physicalLoaded).Contains('<script>unsafe')) 'Physical playback observations round-trip and report text is escaped'
+        $blocked=$false;try{Resolve-PhysicalMediaFile $phoneRoot '../outside.mp4'|Out-Null}catch{$blocked=$true}
+        Assert-True ($blocked) 'Imported media paths cannot escape the session'
+    }finally{$receiver.Dispose();$webClient.Dispose()}
+    Assert-True ($receiver.Finished) 'Stopping phone reception closes the listener'
+    $expiry=[AudioNoiseDiagnostics.LocalReceiver]::Start('127.0.0.1',$phoneRoot,(Join-Path $root 'web'),1)
+    try{$deadline=[DateTime]::UtcNow.AddSeconds(5);while(-not $expiry.Finished -and [DateTime]::UtcNow -lt $deadline){Start-Sleep -Milliseconds 50};Assert-True ($expiry.Finished) 'Pairing reception automatically expires'}finally{$expiry.Dispose()}
 
     & {
         function Read-WinRtBluetoothRadios { [pscustomobject]@{state='On';radioStates=@('On')} }

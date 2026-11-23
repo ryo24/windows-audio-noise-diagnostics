@@ -1,4 +1,4 @@
-﻿param([switch]$SmokeTest, [string]$ScreenshotPath, [switch]$ExerciseWorkflow, [switch]$ExerciseAudioWorkflow, [ValidateSet('Tests','Bluetooth','Audio')][string]$ScreenshotTab='Tests')
+﻿param([switch]$SmokeTest, [string]$ScreenshotPath, [switch]$ExerciseWorkflow, [switch]$ExerciseAudioWorkflow, [switch]$ExercisePhoneWorkflow, [ValidateSet('Tests','Bluetooth','Audio','Phone')][string]$ScreenshotTab='Tests')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Core.ps1')
 . (Join-Path $PSScriptRoot 'Inventory.ps1')
@@ -81,6 +81,7 @@ function Update-UiState {
     $report.Enabled=($null -ne $script:session)
     $folder.Enabled=($null -ne $script:session)
     Update-AudioUi
+    Update-PhoneUi
 }
 function Receive-BluetoothSamples {
     if (-not $script:bluetoothMonitor) { return }
@@ -199,6 +200,7 @@ $btGrid.Controls.Add($btHelp,0,3); $btGrid.SetColumnSpan($btHelp,2)
 $btGrid.Controls.Add($btStatus,0,4); $btGrid.SetColumnSpan($btStatus,2); $btTab.Controls.Add($btGrid)
 $tabs.TabPages.AddRange([Windows.Forms.TabPage[]]@($testTab,$btTab,$historyTab)); $layout.Controls.Add($tabs,0,4)
 $audioTab=New-AudioCaptureTab;[void]$tabs.TabPages.Add($audioTab)
+$phoneTab=New-PhoneCaptureTab;[void]$tabs.TabPages.Add($phoneTab)
 $tabs.Add_SelectedIndexChanged({if($tabs.SelectedTab -eq $audioTab -and $audioOutput.Items.Count -eq 0){Refresh-AudioOutputs}})
 $testGrid=New-Object Windows.Forms.TableLayoutPanel; $testGrid.Dock='Fill'; $testGrid.ColumnCount=2; $testGrid.RowCount=7
 [void]$testGrid.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Absolute',175)))
@@ -244,6 +246,7 @@ $collect.Add_Click({
         $script:session=New-DiagnosticSession $profile
         $script:sessionDirectory=Join-Path (Join-Path $script:dataRoot 'sessions') $script:session.id
         Refresh-AudioRecords
+        Refresh-PhysicalRecords
         Save-CurrentSession
         Start-CollectionWorker 'inventory'
     } catch { Show-UiError $_.Exception.Message; Update-UiState }
@@ -261,11 +264,13 @@ $resume.Add_Click({
             if ([IO.Path]::GetFullPath($target) -ne [IO.Path]::GetFullPath($dialog.FileName) -and (Test-Path -LiteralPath $target)) { throw '同じIDの記録がすでにあります。保存先のsession.jsonを選択してください。' }
             foreach ($test in @($loaded.tests | Where-Object { $_.result -eq 'InProgress' })) { $test.result='Interrupted'; $test.endedUtc=$loaded.updatedUtc; $test.notes += ' / 前回の保存以降は観察時間不明のため中断として再開。' }
             Import-SessionAudio $loaded (Split-Path -Parent $dialog.FileName) $script:sessionDirectory
+            Import-PhysicalFiles $loaded (Split-Path -Parent $dialog.FileName) $script:sessionDirectory
             foreach($probe in @($loaded.audioProbes | Where-Object {$_.status -in @('Starting','Recording')})){$probe.status='Interrupted';$probe.verification.reviewPlaybackCompleted=$false;$probe.verification.notes+=' 録音が中断され、WAVが未確定の可能性があります。'}
             $script:session=$loaded
             Set-ProfileControls $loaded.profile
             Save-CurrentSession
             Refresh-AudioRecords
+            Refresh-PhysicalRecords
             $status.Text='記録を再開しました。前のテストは保持し、新しいテストを追加できます。'
             Update-UiState
         }
@@ -340,6 +345,7 @@ $folder.Add_Click({ try { Start-Process explorer.exe -ArgumentList ('"' + $scrip
 
 $timer=New-Object Windows.Forms.Timer; $timer.Interval=500
 $timer.Add_Tick({
+    try{Poll-PhoneReceiver}catch{$status.Text='スマートフォン記録の保存に失敗しました。';Show-UiError $_.Exception.Message}
     try{Poll-AudioJobs}catch{$status.Text='音声記録の保存に失敗しました。';Show-UiError $_.Exception.Message}
     if($script:closing -and -not $script:audioRecorder -and -not $script:audioPlayback -and -not $script:worker -and -not $script:bluetoothMonitor){$form.Close();return}
     try { Receive-BluetoothSamples } catch { $status.Text='Bluetooth記録の保存に失敗しました。'; Show-UiError $_.Exception.Message }
@@ -366,6 +372,7 @@ $timer.Add_Tick({
 })
 $form.Add_FormClosing({
     param($sender,$eventArgs)
+    if($script:phoneReceiver){try{Stop-PhoneReceiver}catch{Show-UiError $_.Exception.Message;$eventArgs.Cancel=$true;return}}
     if($script:audioRecorder -or $script:audioPlayback){if($script:audioRecorder){$script:audioRecorder.Stop()};if($script:audioPlayback){$script:audioPlayback.Stop()};if($script:bluetoothMonitor){[void]$script:bluetoothMonitor.cancel.Set()};$script:closing=$true;$eventArgs.Cancel=$true;$status.Text='音声ファイルを確定してから閉じます。';return}
     if ($script:worker) { $eventArgs.Cancel=$true; [Windows.Forms.MessageBox]::Show('情報の取得中です。取得が終わってから閉じてください。','取得中') | Out-Null; return }
     if ($script:activeTest) {
@@ -386,14 +393,31 @@ try {
     Update-UiState
     if ($SmokeTest) {
         $form.Show(); $form.PerformLayout(); [Windows.Forms.Application]::DoEvents()
-        if ($ExerciseWorkflow -or $ExerciseAudioWorkflow) {
+        if ($ExerciseWorkflow -or $ExerciseAudioWorkflow -or $ExercisePhoneWorkflow) {
             $speaker.Text='Local UI verification'; $cStates.SelectedIndex=1
             $collect.PerformClick()
             $timer.Start()
             $deadline=[DateTime]::UtcNow.AddSeconds(120)
             while (($script:worker -or $script:bluetoothMonitor) -and [DateTime]::UtcNow -lt $deadline) { [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
             if ($script:worker -or -not $script:session.inventory -or -not $start.Enabled) { throw 'The UI inventory workflow did not complete.' }
-            if($ExerciseAudioWorkflow){
+            if($ExercisePhoneWorkflow){
+                $tabs.SelectedTab=$phoneTab
+                [void]$phoneAddress.Items.Add('127.0.0.1');$phoneAddress.SelectedIndex=0;Update-UiState;$phoneStart.PerformClick()
+                if(-not $script:phoneReceiver){throw 'The UI did not start the local receiver.'}
+                $ownedReceiver=$script:phoneReceiver
+                Initialize-AudioInterop
+                $fixture=Join-Path $script:dataRoot 'phone-fixture.wav';[AudioNoiseDiagnostics.AudioFiles]::GenerateReference($fixture)
+                $client=New-Object Net.WebClient
+                try{[void]$client.UploadData($script:phoneReceiver.Url+'upload','POST',[IO.File]::ReadAllBytes($fixture))}finally{$client.Dispose()}
+                $deadline=[DateTime]::UtcNow.AddSeconds(10)
+                while(@($script:session.physicalRecordings).Count -eq 0 -and [DateTime]::UtcNow -lt $deadline){[Windows.Forms.Application]::DoEvents();Start-Sleep -Milliseconds 50}
+                if(@($script:session.physicalRecordings).Count -ne 1 -or $collect.Enabled -or $resume.Enabled){throw 'Receiver import or session locking failed.'}
+                $physicalReviewed.Checked=$true;$physicalHeard.SelectedIndex=1;$physicalRoute.Text='Synthetic UI test';$physicalSave.PerformClick()
+                $form.Close()
+                $saved=Read-Session (Join-Path $script:sessionDirectory 'session.json')
+                if(-not $ownedReceiver.Finished -or $saved.physicalRecordings[0].verification.heardNoise -ne 'Yes'){throw 'Receiver close or physical review was not saved.'}
+                Write-Output 'UI phone reception, session lock, media import, manual review and listener cleanup OK'
+            }elseif($ExerciseAudioWorkflow){
                 $tabs.SelectedTab=$audioTab;Refresh-AudioOutputs
                 if($audioOutput.Items.Count -eq 0){throw 'Audio workflow validation requires an active render endpoint.'}
                 $audioConsent.Checked=$true;[void]$audioLength.Items.Add('3');$audioLength.SelectedItem='3'
@@ -442,9 +466,10 @@ try {
             Write-Output 'UI inventory, test completion, events, marker and interruption workflow OK'
             }
         }
-        if ($ScreenshotPath -and -not $ExerciseWorkflow -and -not $ExerciseAudioWorkflow) {
+        if ($ScreenshotPath -and -not $ExerciseWorkflow -and -not $ExerciseAudioWorkflow -and -not $ExercisePhoneWorkflow) {
             if ($ScreenshotTab -eq 'Bluetooth') { $tabs.SelectedTab=$btTab; [Windows.Forms.Application]::DoEvents() }
             if ($ScreenshotTab -eq 'Audio') { $tabs.SelectedTab=$audioTab; [Windows.Forms.Application]::DoEvents() }
+            if ($ScreenshotTab -eq 'Phone') { $tabs.SelectedTab=$phoneTab; [Windows.Forms.Application]::DoEvents() }
             [IO.Directory]::CreateDirectory((Split-Path -Parent ([IO.Path]::GetFullPath($ScreenshotPath)))) | Out-Null
             $bitmap=New-Object Drawing.Bitmap($form.Width,$form.Height)
             $form.DrawToBitmap($bitmap,(New-Object Drawing.Rectangle(0,0,$form.Width,$form.Height)))
@@ -457,5 +482,6 @@ try {
     if ($script:bluetoothMonitor) { [void]$script:bluetoothMonitor.cancel.Set(); $script:bluetoothMonitor.worker.Stop(); $script:bluetoothMonitor.worker.Dispose(); $script:bluetoothMonitor.cancel.Dispose() }
     if($script:audioRecorder){$script:audioRecorder.Dispose();Complete-AudioProbeRecord $script:recordingProbe $script:audioRecorder $script:sessionDirectory;Save-CurrentSession}
     if($script:audioPlayback){$script:audioPlayback.Dispose()}
+    if($script:phoneReceiver){$script:phoneReceiver.Dispose();$received=$null;while($script:phoneReceiver.Received.TryDequeue([ref]$received)){Add-PhysicalMedia $received}}
     if ($script:toolLock) { $script:toolLock.Dispose() }
 }

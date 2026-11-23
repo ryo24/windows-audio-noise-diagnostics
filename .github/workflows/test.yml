@@ -13,3 +13,10 @@ jobs:
       - name: Build the Windows Forms interface
         shell: powershell
         run: .\scripts\Start-Diagnostics.ps1 -SmokeTest
+      - name: Set up Node for browser checks
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run local browser integration
+        shell: powershell
+        run: node .\tests\test-phone-browser.mjs

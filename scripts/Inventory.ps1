@@ -1,6 +1,7 @@
 ﻿. (Join-Path $PSScriptRoot 'Bluetooth.ps1')
 
 . (Join-Path $PSScriptRoot 'AudioCapture.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalCapture.ps1')
 
 function Invoke-CollectionSection {
     param([scriptblock]$Read)

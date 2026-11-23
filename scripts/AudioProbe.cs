@@ -168,17 +168,18 @@ namespace AudioNoiseDiagnostics {
     }
     public class PacketFlag { public double OffsetSeconds; public uint Flags; public ulong DeviceFramePosition; }
     public sealed class AudioProbe : IDisposable {
-        readonly string endpointId,path,reference; readonly int maxSeconds; readonly Thread thread;
+        readonly string endpointId,path,reference,renderEndpointId; readonly bool loopback; readonly int maxSeconds; readonly Thread thread;
         volatile bool stop; public volatile bool Finished; public volatile string Status="Starting";
         public string ErrorCode; public string StartedUtc,EndedUtc; public int SampleRate,Channels,Bits;
         public long CapturedFrames,WrittenFrames,InsertedSilenceFrames,PacketCount,Discontinuities,TimestampErrors;
         public double ElapsedSeconds,ReferenceStartOffsetSeconds; public bool SizeLimitReached;
         readonly List<PacketFlag> flags=new List<PacketFlag>();
         public PacketFlag[] FlagEvents { get { lock(flags) { return flags.ToArray(); } } }
-        public static AudioProbe Start(string endpointId,string path,string reference,int maxSeconds) { return new AudioProbe(endpointId,path,reference,maxSeconds); }
-        AudioProbe(string endpointId,string path,string reference,int maxSeconds) {
+        public static AudioProbe Start(string endpointId,string path,string reference,int maxSeconds) { return new AudioProbe(endpointId,endpointId,path,reference,maxSeconds,true); }
+        public static AudioProbe StartMicrophone(string inputId,string outputId,string path,string reference,int maxSeconds) { return new AudioProbe(inputId,outputId,path,reference,maxSeconds,false); }
+        AudioProbe(string endpointId,string renderEndpointId,string path,string reference,int maxSeconds,bool loopback) {
             if (maxSeconds<1||maxSeconds>300) throw new ArgumentOutOfRangeException("maxSeconds");
-            this.endpointId=endpointId;this.path=path;this.reference=reference;this.maxSeconds=maxSeconds;
+            this.endpointId=endpointId;this.renderEndpointId=renderEndpointId;this.path=path;this.reference=reference;this.maxSeconds=maxSeconds;this.loopback=loopback;
             thread=new Thread(Run);thread.IsBackground=true;thread.SetApartmentState(ApartmentState.STA);thread.Start();
         }
         public void Stop() { stop=true; }
@@ -190,12 +191,12 @@ namespace AudioNoiseDiagnostics {
                 device=NativeAudio.Device(endpointId,out enumerator); client=NativeAudio.Client(device);
                 Marshal.ThrowExceptionForHR(client.GetMixFormat(out pointer)); var mix=WaveFormat.FromPointer(pointer);
                 SampleRate=mix.Rate;Channels=mix.Channels;Bits=mix.Bits;
-                Guid session=Guid.Empty; Marshal.ThrowExceptionForHR(client.Initialize(0,0x20000,1000000,0,pointer,ref session));
+                Guid session=Guid.Empty; Marshal.ThrowExceptionForHR(client.Initialize(0,loopback?0x20000u:0u,1000000,0,pointer,ref session));
                 object service;Guid iid=typeof(ICaptureClient).GUID;Marshal.ThrowExceptionForHR(client.GetService(ref iid,out service));capture=(ICaptureClient)service;
                 sink=new WaveSink(path,mix); Marshal.ThrowExceptionForHR(client.Start());
                 double startQpc=(double)Stopwatch.GetTimestamp()/Stopwatch.Frequency;
                 StartedUtc=DateTime.UtcNow.ToString("o");clock.Start();Status="Recording";
-                if (!String.IsNullOrEmpty(reference)) { ReferenceStartOffsetSeconds=clock.Elapsed.TotalSeconds; renderer=new WaveRenderer(endpointId,reference,true); }
+                if (!String.IsNullOrEmpty(reference)) { ReferenceStartOffsetSeconds=clock.Elapsed.TotalSeconds; renderer=new WaveRenderer(renderEndpointId,reference,true); }
                 long maximumFrames=268435456/mix.Align;
                 while (!stop && clock.Elapsed.TotalSeconds<maxSeconds && sink.Frames<maximumFrames) {
                     uint packet;Marshal.ThrowExceptionForHR(capture.GetNextPacketSize(out packet));
@@ -266,11 +267,13 @@ namespace AudioNoiseDiagnostics {
             finally {if(raw!=IntPtr.Zero)Marshal.Release(raw);NativeAudio.Release(store);}
             return fallback;
         }
-        public static RenderEndpoint[] Endpoints() {
+        public static RenderEndpoint[] Endpoints() { return EnumerateEndpoints(0); }
+        public static RenderEndpoint[] InputEndpoints() { return EnumerateEndpoints(1); }
+        static RenderEndpoint[] EnumerateEndpoints(int flow) {
             object enumerator=null;IDeviceCollection collection=null;IntPtr raw=IntPtr.Zero;
             var result=new List<RenderEndpoint>();
             try {
-                enumerator=new Enumerator();Marshal.ThrowExceptionForHR(((IDeviceEnumerator)enumerator).EnumAudioEndpoints(0,1,out raw));
+                enumerator=new Enumerator();Marshal.ThrowExceptionForHR(((IDeviceEnumerator)enumerator).EnumAudioEndpoints(flow,1,out raw));
                 collection=(IDeviceCollection)Marshal.GetObjectForIUnknown(raw);Marshal.Release(raw);raw=IntPtr.Zero;
                 uint count;Marshal.ThrowExceptionForHR(collection.GetCount(out count));
                 for(uint i=0;i<count;i++) {

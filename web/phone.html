@@ -1,0 +1,13 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>音声ノイズをスマホで記録</title><link rel="stylesheet" href="web.css"><script defer src="phone.js"></script></head><body><main>
+<p class="eyebrow">LOCAL AUDIO DIAGNOSTICS</p><h1>スピーカーの音を記録</h1><p>PCと同じWi-Fi内だけで受け渡します。音声・動画を外部クラウドへ送りません。スピーカー近くで短く録音し、送信前に聞き直してください。</p>
+<section><h2>1. 録音または撮影</h2><p id="direct-note">録音方法を確認しています。</p><div id="direct-controls" hidden><button id="record-start">ブラウザーで録音開始</button><button id="record-stop" disabled>録音停止</button></div>
+<label class="file-button">音声を録音・選択<input id="audio-file" type="file" accept="audio/*" capture="user"></label>
+<label class="file-button">カメラで動画を撮影<input id="video-file" type="file" accept="video/*" capture="environment"></label>
+<label class="file-button secondary">保存済みの音声・動画を選択<input id="saved-file" type="file" accept="audio/*,video/*,.m4a,.mov,.webm,.wav"></label>
+<p>端末によって録音アプリが表示されない場合は、動画撮影か、ボイスメモ等で保存したファイルを選んでください。上限128MB。ゲストWi-Fiなど端末間通信が禁止されている環境では利用できません。</p></section>
+<section><h2>2. 聞き直す</h2><video id="preview" controls playsinline preload="metadata" hidden></video><p id="file-status">まだ記録を選んでいません。</p>
+<label><input id="confirmed" type="checkbox">この記録を再生して内容を確認した</label>
+<label>ノイズの聞こえ方<select id="heard"><option value="Unknown">判断できない・未確認</option><option value="Yes">ノイズが聞こえる</option><option value="No">ノイズは聞こえない</option></select></label>
+<label>備考（任意）<textarea id="note" maxlength="1000" placeholder="スピーカーからの距離、Bluetoothの条件など"></textarea></label></section>
+<section><h2>3. PCへ送る</h2><p>受信中のPCへ直接送ります。信頼できる自宅などのWi-Fiで使用してください。このLAN内HTTP転送は暗号化されません。QRの受付は15分で終了します。</p><button id="send" disabled>この記録をPCへ送信</button><p id="status" role="status" aria-live="polite">記録を選ぶと送信できます。</p></section>
+</main></body></html>

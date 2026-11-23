@@ -12,6 +12,8 @@ function Refresh-AudioOutputs {
         Initialize-AudioInterop
         $audioOutput.Items.Clear()
         foreach ($endpoint in [AudioNoiseDiagnostics.AudioFiles]::Endpoints()) { [void]$audioOutput.Items.Add($endpoint) }
+        $audioInput.Items.Clear();foreach($inputDevice in [AudioNoiseDiagnostics.AudioFiles]::InputEndpoints()){[void]$audioInput.Items.Add($inputDevice)}
+        if($audioInput.Items.Count -gt 0){$audioInput.SelectedIndex=0}
         if ($audioOutput.Items.Count -gt 0) {
             $audioOutput.SelectedIndex=0
             try { $default=[AudioNoiseDiagnostics.Endpoint]::Read().Id;for($i=0;$i -lt $audioOutput.Items.Count;$i++){if($audioOutput.Items[$i].Id -eq $default){$audioOutput.SelectedIndex=$i}} } catch { }
@@ -31,10 +33,13 @@ function Update-AudioUi {
     if(-not $audioStart){return}
     $occupied=($script:audioRecorder -or $script:audioPlayback)
     $probe=Get-SelectedAudioProbe
-    $audioStart.Enabled=($script:session -and -not $script:worker -and -not $occupied -and $audioConsent.Checked -and $audioOutput.SelectedIndex -ge 0)
+    $needsOutput=($audioSource.SelectedIndex -eq 0 -or $audioMode.SelectedIndex -eq 0)
+    $endpointReady=(((-not $needsOutput) -or $audioOutput.SelectedIndex -ge 0) -and ($audioSource.SelectedIndex -eq 0 -or $audioInput.SelectedIndex -ge 0))
+    $audioStart.Enabled=($script:session -and -not $script:worker -and -not $occupied -and $audioConsent.Checked -and $endpointReady)
     $audioStop.Enabled=[bool]$occupied
     $audioNoise.Enabled=[bool]$script:audioRecorder
-    foreach($control in @($audioOutput,$audioRefresh,$audioMode,$audioLength,$audioConsent,$audioRecords)){$control.Enabled=(-not $occupied)}
+    foreach($control in @($audioOutput,$audioRefresh,$audioMode,$audioLength,$audioConsent,$audioRecords,$audioSource)){$control.Enabled=(-not $occupied)}
+    $audioInput.Enabled=(-not $occupied -and $audioSource.SelectedIndex -eq 1)
     $canPlay=($probe -and -not $occupied -and -not $script:worker -and -not $script:activeTest -and $audioOutput.SelectedIndex -ge 0 -and $probe.status -in @('Completed','NoAudioData'))
     $audioReplay.Enabled=[bool]$canPlay
     $audioReference.Enabled=($canPlay -and [bool]$probe.files.reference)
@@ -88,10 +93,10 @@ function Start-AudioReview {
 }
 function New-AudioCaptureTab {
     $tab=New-Object Windows.Forms.TabPage;$tab.Text='テスト音声・録音・聞き直し';$tab.Padding=New-Object Windows.Forms.Padding(10);$tab.AutoScroll=$true
-    $grid=New-Object Windows.Forms.TableLayoutPanel;$grid.Dock='Fill';$grid.MinimumSize=New-Object Drawing.Size(0,420);$grid.ColumnCount=2;$grid.RowCount=9
+    $grid=New-Object Windows.Forms.TableLayoutPanel;$grid.Dock='Top';$grid.Height=490;$grid.MinimumSize=New-Object Drawing.Size(0,490);$grid.ColumnCount=2;$grid.RowCount=10
     [void]$grid.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Absolute',160)));[void]$grid.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Percent',100)))
-    foreach($height in @(74,44,36,32,44,44,36,56,0)){$style=New-Object Windows.Forms.RowStyle;if($height -eq 0){$style.SizeType='Percent';$style.Height=100}else{$style.SizeType='Absolute';$style.Height=$height};[void]$grid.RowStyles.Add($style)}
-    $help=New-UiLabel "マイクなしで選択した出力全体を録音します。対象アプリも同じ出力へ設定してください。`r`n3.5mmのアナログ回路で後から混入するノイズは録れない場合があります。録音にないことだけで正常とは判定しません。`r`nまず小音量で開始。録音の聞き直しは、可能ならHDMIなど別の出力でも行ってください。"
+    foreach($height in @(74,40,44,36,32,44,44,36,56,0)){$style=New-Object Windows.Forms.RowStyle;if($height -eq 0){$style.SizeType='Percent';$style.Height=100}else{$style.SizeType='Absolute';$style.Height=$height};[void]$grid.RowStyles.Add($style)}
+    $help=New-UiLabel "デジタル出力の録音、または挿したマイクからの録音を選べます。`r`nデジタル録音ではアナログ回路以降のノイズが入らない場合があります。マイクはスピーカー近くへ置き、周囲の音も記録します。`r`nまず小音量で開始。聞き直しは可能ならHDMIなど別の出力でも比較してください。"
     $help.Dock='Fill';$help.AutoSize=$false;$grid.Controls.Add($help,0,0);$grid.SetColumnSpan($help,2)
     $script:audioOutput=New-UiCombo @();$audioOutput.DisplayMember='Name'
     $script:audioRefresh=New-UiButton '出力一覧を取得'
@@ -118,6 +123,14 @@ function New-AudioCaptureTab {
     $script:audioResemblance=New-UiCombo @('聞こえ方：未確認','実際の出力と同じ','実際の出力と異なる','同じか判断できない')
     $reviewGrid.Controls.Add($audioLive,0,0);$reviewGrid.Controls.Add($audioRecorded,1,0);$reviewGrid.Controls.Add($audioResemblance,2,0)
     $grid.Controls.Add($reviewGrid,0,8);$grid.SetColumnSpan($reviewGrid,2);$tab.Controls.Add($grid)
+    foreach($control in @($grid.Controls | Sort-Object -Property @{Expression={$grid.GetRow($_)}} -Descending)){if($grid.GetRow($control) -ge 1){$grid.SetRow($control,$grid.GetRow($control)+1)}}
+    $script:audioSource=New-UiCombo @('デジタル出力（ループバック）','接続したマイク入力')
+    $script:audioInput=New-UiCombo @();$audioInput.DisplayMember='Name'
+    $sources=New-Object Windows.Forms.TableLayoutPanel;$sources.ColumnCount=2;$sources.Dock='Fill'
+    foreach($width in @(45,55)){[void]$sources.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Percent',$width)))}
+    $sources.Controls.Add($audioSource,0,0);$sources.Controls.Add($audioInput,1,0);$grid.Controls.Add((New-UiLabel '録音元・マイク'),0,1);$grid.Controls.Add($sources,1,1)
+    $audioConsent.Text='選択した出力全体、またはマイクが拾う周囲の音が録音されることを確認しました'
+    $audioSource.Add_SelectedIndexChanged({Update-AudioUi});$audioMode.Add_SelectedIndexChanged({Update-AudioUi})
     $audioRefresh.Add_Click({Refresh-AudioOutputs});$audioConsent.Add_CheckedChanged({Update-AudioUi})
     $audioRecords.Add_SelectedIndexChanged({$record=Get-SelectedAudioProbe;if($record){$audioLive.SelectedIndex=[Math]::Max(0,[Array]::IndexOf(@('Unknown','Yes','No'),$record.verification.liveNoise));$audioRecorded.SelectedIndex=[Math]::Max(0,[Array]::IndexOf(@('Unreviewed','Yes','No','Unknown'),$record.verification.replayNoise));$audioResemblance.SelectedIndex=[Math]::Max(0,[Array]::IndexOf(@('Unreviewed','Same','Different','Uncertain'),$record.verification.resemblance))};Update-AudioUi})
     $audioStart.Add_Click({
@@ -125,7 +138,9 @@ function New-AudioCaptureTab {
             Initialize-AudioInterop
             $mode=if($audioMode.SelectedIndex -eq 0){'Reference'}else{'ExternalApp'}
             $testId=if($script:activeTest){$script:activeTest.id}else{$null}
-            $probe=New-AudioProbeRecord $mode $audioOutput.SelectedItem.Name $testId ([int]$audioLength.SelectedItem)
+            $outputName=if($audioOutput.SelectedItem){$audioOutput.SelectedItem.Name}else{'出力未選択'}
+            $probe=New-AudioProbeRecord $mode $outputName $testId ([int]$audioLength.SelectedItem)
+            if($audioSource.SelectedIndex -eq 1){$probe.sourceKind='Microphone';$probe.inputEndpointName=$audioInput.SelectedItem.Name;$probe.files.recording='audio/'+$probe.id+'/microphone.wav';$probe.scope='選択したマイク入力。実際のスピーカー音に加え、周囲音・距離・マイクの処理の影響も含みます。'}
             if(-not $script:session.PSObject.Properties['audioProbes']){$script:session | Add-Member -NotePropertyName audioProbes -NotePropertyValue @()}
             $script:session.audioProbes=@($script:session.audioProbes)+@($probe)
             $audioCapturePath=Resolve-AudioFile $script:sessionDirectory $probe.files.recording
@@ -133,7 +148,8 @@ function New-AudioCaptureTab {
             $audioReferencePath=$null
             if($mode -eq 'Reference'){$audioReferencePath=Resolve-AudioFile $script:sessionDirectory $probe.files.reference;[AudioNoiseDiagnostics.AudioFiles]::GenerateReference($audioReferencePath)}
             $script:recordingProbe=$probe;Save-CurrentSession
-            $script:audioRecorder=[AudioNoiseDiagnostics.AudioProbe]::Start($audioOutput.SelectedItem.Id,$audioCapturePath,$audioReferencePath,$probe.maximumSeconds)
+            if($probe.sourceKind -eq 'Microphone'){$script:audioRecorder=[AudioNoiseDiagnostics.AudioProbe]::StartMicrophone($audioInput.SelectedItem.Id,$audioOutput.SelectedItem.Id,$audioCapturePath,$audioReferencePath,$probe.maximumSeconds)}
+            else{$script:audioRecorder=[AudioNoiseDiagnostics.AudioProbe]::Start($audioOutput.SelectedItem.Id,$audioCapturePath,$audioReferencePath,$probe.maximumSeconds)}
             Update-UiState
         }catch{if($probe -and $probe.status -eq 'Starting'){$probe.status='Failed';Save-CurrentSession;Refresh-AudioRecords};Show-UiError $_.Exception.Message}
     })

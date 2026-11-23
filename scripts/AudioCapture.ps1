@@ -19,6 +19,7 @@ function New-AudioProbeRecord {
     [pscustomobject]@{
         id=$id;testId=$TestId;mode=$Mode;endpointName=$EndpointName;tool=Get-ToolIdentity;createdUtc=[DateTime]::UtcNow.ToString('o')
         status='Starting';maximumSeconds=$MaximumSeconds;capture=$null;noiseMarkersUtc=@()
+        sourceKind='Loopback';inputEndpointName=$null
         files=[pscustomobject]@{recording=('audio/'+$id+'/loopback.wav');reference=if($Mode -eq 'Reference'){'audio/'+$id+'/reference.wav'}else{$null};recordingSha256=$null;referenceSha256=$null}
         verification=[pscustomobject]@{liveNoise='Unknown';replayNoise='Unreviewed';resemblance='Unreviewed';reviewEndpointName=$null;reviewPlaybackCompleted=$false;reviewPlayedSeconds=0;reviewStartedUtc=$null;referencePlayed=$false;notes=''}
         referenceId=if($Mode -eq 'Reference'){'audio-noise-reference-v1-10s-48000hz-stereo-pcm16-peak0.08'}else{$null}
@@ -74,14 +75,14 @@ function Get-AudioReportHtml {
         $finding='録音の聞き直し・実際の出力との照合は未完了です。'
         if($record.status -in @('Failed','Interrupted','NoAudioData')){$finding='録音失敗・中断または取得データ不足です。この録音を使ってノイズなしとは判定できません。'}
         elseif($review.reviewPlaybackCompleted){
-            if($review.liveNoise -eq 'Yes' -and $review.replayNoise -eq 'No'){$finding='実際の出力ではノイズあり、録音の再生ではなしとの観察です。アナログ回路以降の混入、録音経路の違い、取得の限界などを確認します。PCが正常という判定にはしません。'}
+            if($review.liveNoise -eq 'Yes' -and $review.replayNoise -eq 'No'){$finding=if($record.sourceKind -eq 'Microphone'){'実際にはノイズが聞こえ、マイク録音の再生ではなしとの観察です。マイクの距離・感度・音声処理・再生経路を確認します。PCが正常という判定にはしません。'}else{'実際の出力ではノイズあり、録音の再生ではなしとの観察です。アナログ回路以降の混入、録音経路の違い、取得の限界などを確認します。PCが正常という判定にはしません。'}}
             elseif($review.replayNoise -eq 'Yes'){$finding='保存音声の再生でもノイズありとの観察です。再生する出力側が新たにノイズを加える可能性もあります。元のテスト音との比較や、HDMI・別PCなど既知の正常な経路で再確認してください。'}
             else{$finding='聞き直しは完了していますが、無発生だけで故障や間欠ノイズを否定するものではありません。'}
         }
         $links=New-Object 'System.Collections.Generic.List[string]'
-        foreach($kind in @('recording','reference')){$relative=$record.files.$kind;if($relative -match '^audio/[a-fA-F0-9]{32}/(loopback|reference)\.wav$'){$links.Add('<a href="'+$relative+'">'+$kind+' WAV</a>')}}
-        $summary=[pscustomobject]@{status=$record.status;mode=$record.mode;captureOutput=$record.endpointName;verification=$record.verification;capture=$record.capture;noiseMarkersUtc=$record.noiseMarkersUtc;files=$record.files;tool=$record.tool}
+        foreach($kind in @('recording','reference')){$relative=$record.files.$kind;if($relative -match '^audio/[a-fA-F0-9]{32}/(loopback|microphone|reference)\.wav$'){$links.Add('<a href="'+$relative+'">'+$kind+' WAV</a>')}}
+        $summary=[pscustomobject]@{status=$record.status;mode=$record.mode;sourceKind=$record.sourceKind;inputEndpoint=$record.inputEndpointName;captureOutput=$record.endpointName;verification=$record.verification;capture=$record.capture;noiseMarkersUtc=$record.noiseMarkersUtc;files=$record.files;tool=$record.tool}
         $sections.Add('<article><h3>録音 '+(ConvertTo-HtmlText $record.id)+'</h3><p>'+(ConvertTo-HtmlText $finding)+'</p><p>'+($links -join ' ／ ')+'</p><details><summary>録音・照合の詳細</summary><pre>'+(ConvertTo-HtmlText ($summary | ConvertTo-Json -Depth 12))+'</pre></details></article>')
     }
-    return '<h2>テスト音声・ループバック録音・聞き直し</h2><p>選択したWindows出力のデジタル音声を取得します。3.5mmのアナログ回路以降で混入したノイズを収録できる保証はありません。音声欠落フラグは可聴ノイズの自動検出ではありません。無音の時間合わせ、再生時の形式変換や出力経路の影響も考慮してください。</p>'+($sections -join "`n")
+    return '<h2>テスト音声・録音・聞き直し</h2><p>LoopbackはWindows出力のデジタル音声、Microphoneは選択したマイク入力です。マイクには部屋の音、距離、入力の音声処理の影響も含まれます。デジタル録音に3.5mmのアナログ回路以降の混入音が入る保証はありません。欠落フラグだけで可聴ノイズを自動判定しません。</p>'+($sections -join "`n")
 }
