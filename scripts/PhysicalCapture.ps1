@@ -27,7 +27,7 @@ function Add-PhysicalMedia {
     if(-not $script:session.PSObject.Properties['physicalRecordings']){$script:session|Add-Member -NotePropertyName physicalRecordings -NotePropertyValue @()}
     $probe=Get-SelectedAudioProbe
     $probeId=if($script:recordingProbe -and $script:audioRecorder){$script:recordingProbe.id}elseif($probe){$probe.id}else{''}
-    $testId=if($script:activeTest){$script:activeTest.id}else{''}
+    $testId=if($script:activeTest){$script:activeTest.id}elseif($probe){$probe.testId}else{''}
     $record=ConvertTo-PhysicalRecord $Media $probeId $testId
     $script:session.physicalRecordings=@($script:session.physicalRecordings)+@($record)
     [void](Add-TimelineEvent $script:session 'PhysicalFileImported' $testId $probeId ('physicalId='+$record.id+'; not a recording-start time'))

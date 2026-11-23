@@ -22,7 +22,7 @@ function Get-UiButtons {
     foreach($control in $Parent.Controls){if($control -is [Windows.Forms.Button]){$control};Get-UiButtons $control}
 }
 $form.Show();$form.PerformLayout();[Windows.Forms.Application]::DoEvents()
-$exercise=($ExerciseWorkflow -or $ExerciseAudioWorkflow -or $ExercisePhoneWorkflow -or $ExerciseExportWorkflow -or $ExerciseUxWorkflow -or $ExerciseTraceWorkflow)
+$exercise=($ExerciseWorkflow -or $ExerciseAudioWorkflow -or $ExercisePhoneWorkflow -or $ExerciseExportWorkflow -or $ExerciseUxWorkflow -or $ExerciseTraceWorkflow -or $ExerciseFollowUpWorkflow)
 Assert-Ui (-not $start.Enabled -and $tabs.SelectedTab -eq $preparePage) 'Startup must show preparation and refuse an unprepared start.'
 $buttons=@(Get-UiButtons $form)
 Assert-Ui (@($buttons|Where-Object {$_.Text -like '*調査を開始*'}).Count -eq 1) 'There must be exactly one observation/capture start button.'
@@ -38,6 +38,49 @@ if($exercise){
         Assert-Ui ($script:lastExport -and (Test-Path -LiteralPath $script:lastExport)) 'The export step did not produce a ZIP.'
         Assert-Ui ((Test-DiagnosticBundle $script:lastExport).manifest.sessionId -eq $script:session.id) 'Exported ZIP has the wrong session.'
         Write-Output 'UI export step creates and verifies a complete session ZIP OK'
+    }elseif($ExerciseFollowUpWorkflow){
+        if($audioOutput.Items.Count -eq 0){Write-Output 'SKIP: follow-up capture UI requires an active audio endpoint; state/storage are covered by Run-FollowUpTests.';$form.Close();return}
+        function Start-TraceHelper {
+            param($Run)
+            $fixture=Join-Path $script:ToolRoot 'tests/Invoke-FakeTrace.ps1'
+            $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$fixture+'" -SessionPath "'+(Join-Path $script:sessionDirectory 'session.json')+'" -TraceId '+$Run.id+' -IncludeUsb'
+            Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -WindowStyle Hidden -ArgumentList $arguments -PassThru
+        }
+        $settingsTabs.SelectedTab=$followUpTab;$followUpChoice.SelectedIndex=1;$followUpRoute.Text='Synthetic smartphone position';$audioConsent.Checked=$true
+        Assert-Ui (-not $start.Enabled) 'USB follow-up must require its own trace scope acknowledgement.'
+        $followUpConsent.Checked=$true;$audioLength.SelectedItem='30';Update-UiState
+        Assert-Ui $start.Enabled 'Acknowledged follow-up must use the common start.'
+        Save-UiProof 'follow-up-settings';$settingsNext.PerformClick();$start.PerformClick()
+        Assert-Ui ($script:activeTest -and $script:audioRecorder -and (Test-DetailedTraceBusy)) 'One common start must start observation, audio and linked USB trace.'
+        Wait-Ui {$script:traceRun.phase -eq 'Recording'} 20
+        $linkedTest=$script:activeTest;$linkedProbe=$script:recordingProbe
+        Assert-Ui ($linkedTest.followUp.traceId -eq $script:traceRun.id -and $script:traceRun.state.link.testId -eq $linkedTest.id -and $script:traceRun.state.link.probeId -eq $linkedProbe.id) 'Trace, probe and comparison must be linked by IDs.'
+        Assert-Ui ($linkedProbe.referenceId -like '*v2-indexed*' -and $linkedProbe.selectedOutputFormat.status -eq 'collected') 'Follow-up must use indexed sound and the actual selected output format.'
+        Save-UiProof 'follow-up-recording';$mark.PerformClick();$finish.PerformClick()
+        Assert-Ui ($script:traceRun.stopRequested -and $script:finishRequested) 'The common finish must request trace and recording stop together.'
+        Wait-Ui {-not $script:activeTest -and -not $script:worker -and -not $script:bluetoothMonitor -and -not (Test-DetailedTraceBusy)}
+        Assert-Ui ($script:traceRun.phase -eq 'Completed' -and (Test-Path (Join-Path $script:traceRun.directory 'usb.etl'))) 'Linked USB trace must finalize before export.'
+        Initialize-LocalReceiver
+        $media=[AudioNoiseDiagnostics.LocalReceiver]::ImportFile((Resolve-AudioFile $script:sessionDirectory $linkedProbe.files.reference),$script:sessionDirectory,'FileImport');Add-PhysicalMedia $media
+        Assert-Ui ($script:session.physicalRecordings[0].testId -eq $linkedTest.id -and $script:session.physicalRecordings[0].audioProbeId -eq $linkedProbe.id) 'Physical media imported after finishing must retain the selected comparison linkage.'
+        $tabs.SelectedTab=$settingsPage;$settingsTabs.SelectedTab=$followUpTab;$followUpChoice.SelectedIndex=2;$followUpReference.SelectedIndex=$followUpReference.Items.Count-1
+        Assert-Ui ($followUpGuide.Text.Contains('同じスマホ') -and -not $followUpConsent.Enabled) 'Clean physical control must explain matching the phone method without requiring USB consent.'
+        Save-UiProof 'physical-control'
+        $comparison=New-DiagnosticSession ([pscustomobject]@{speakerModel='synthetic recovery control';cStates='Unknown'})
+        $comparisonTest=New-TestRecord 'Recovery' 'same output' '' '' '' ''
+        Complete-TestTiming $comparisonTest (Get-ClockPoint);$comparisonTest.result='NoRepro';$comparison.tests=@($comparisonTest)
+        $comparisonDirectory=Join-Path $script:dataRoot 'synthetic-comparison';Save-Session $comparison $comparisonDirectory
+        $comparisonPath=Join-Path $comparisonDirectory 'session.json';$beforeHash=(Get-FileHash $comparisonPath).Hash
+        Add-FollowUpReferenceFile $comparisonPath
+        $followUpChoice.SelectedIndex=4;$followUpOperation.SelectedIndex=5;$followUpState.SelectedIndex=2
+        $recoveryPlan=Get-FollowUpPlan
+        Assert-Ui ($recoveryPlan.comparisonSessionId -eq $comparison.id -and $recoveryPlan.comparisonTestId -eq $comparisonTest.id -and $recoveryPlan.comparisonSourceHash -eq $beforeHash -and (Get-FileHash $comparisonPath).Hash -eq $beforeHash) 'Cross-session comparison must retain source identity and hash without modifying its JSON.'
+        Assert-Ui ($recoveryPlan.priorOperation -eq 'MultipleChanges' -and $recoveryPlan.stateAtStart -eq 'NoNoiseConfirmed') 'Recovery comparison must distinguish combined operations and the reported starting state.'
+        Save-UiProof 'recovery-control';$tabs.SelectedTab=$exportPage;Update-UiState
+        Assert-Ui ($exportReady.Text.Contains('既定ではETLを除外')) 'USB follow-up export must explain the opt-in ETL checkbox.'
+        $includeTraces.Checked=$true;$export.PerformClick()
+        Assert-Ui ((Test-DiagnosticBundle $script:lastExport).manifest.files.path -contains ('session/traces/'+$script:traceRun.id+'/usb.etl')) 'Explicit ETL export must include the linked USB trace.'
+        $form.Close();Write-Output 'UI follow-up single start/finish, USB linkage, indexed audio, selected format, physical import and export OK'
     }elseif($ExerciseTraceWorkflow){
         function Start-TraceHelper {
             param($Run)

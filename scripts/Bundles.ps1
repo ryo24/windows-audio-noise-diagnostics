@@ -51,9 +51,12 @@ function Export-DiagnosticBundle {
                 if($state.status -in @('Launching','Starting','Recording','Stopping')){throw '詳細トレースの保存完了を待ってから書き出してください。'}
                 & $addFile ('traces/'+$trace.Name+'/trace.json')
             }
-            $etl='traces/'+$trace.Name+'/trace.etl'
-            if(Test-Path -LiteralPath (Join-Path $SessionDirectory $etl)){
-                if($IncludeTraces){& $addFile $etl $state.sha256}else{$excluded.Add('session/'+$etl)}
+            foreach($kind in @('trace','usb')){
+                $etl='traces/'+$trace.Name+'/'+$kind+'.etl'
+                if(Test-Path -LiteralPath (Join-Path $SessionDirectory $etl)){
+                    $expected=if($kind -eq 'usb'){$state.usb.sha256}else{$state.sha256}
+                    if($IncludeTraces){& $addFile $etl $expected}else{$excluded.Add('session/'+$etl)}
+                }
             }
         }
     }
@@ -174,7 +177,7 @@ function Import-SessionTraces {
     if(-not (Test-Path -LiteralPath $sourceRoot)){return}
     foreach($directory in Get-ChildItem -LiteralPath $sourceRoot -Directory){
         if($directory.Name -notmatch '^[a-fA-F0-9]{32}$'){continue}
-        foreach($name in @('trace.json','trace.etl')){
+        foreach($name in @('trace.json','trace.etl','usb.etl')){
             $source=Join-Path $directory.FullName $name
             if(-not (Test-Path -LiteralPath $source)){continue}
             Assert-RegularBundleFile $SourceDirectory $source

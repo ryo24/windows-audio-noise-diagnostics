@@ -1,13 +1,13 @@
 ﻿# The launcher and elevated recorder share one ID and directory before starting.
 # A stop request is not proof that WPR has stopped or that an ETL was saved.
 function New-TraceRun {
-    param([string]$SessionDirectory,[string]$SessionId)
+    param([string]$SessionDirectory,[string]$SessionId,[switch]$IncludeUsb,$Link=$null)
     if($SessionId -notmatch '^[a-fA-F0-9]{32}$'){throw 'Invalid session ID'}
     $id=[guid]::NewGuid().ToString('N');$point=Get-ClockPoint
     $directory=Join-Path (Join-Path $SessionDirectory 'traces') $id
     [IO.Directory]::CreateDirectory($directory)|Out-Null
     $run=[pscustomobject]@{id=$id;sessionId=$SessionId;directory=$directory;requested=$point;stopRequested=$false;stopPoint=$null;state=$null;phase='Launching';busy=$true;processExitCode=$null;terminalHandled=$false}
-    $state=[pscustomobject]@{id=$id;sessionId=$SessionId;instanceName=('AudioNoise-'+$id);status='Launching';requestedSeconds=60;requested=$point;updated=$point;started=$null;stopping=$null;ended=$null;bytes=0;sha256=$null;errorType=$null}
+    $state=[pscustomobject]@{id=$id;sessionId=$SessionId;instanceName=('AudioNoise-'+$id);status='Launching';includeUsb=[bool]$IncludeUsb;link=$Link;requestedSeconds=60;requested=$point;updated=$point;started=$null;stopping=$null;ended=$null;bytes=0;sha256=$null;errorType=$null}
     Write-AtomicText (Join-Path $directory 'trace.json') ($state|ConvertTo-Json -Depth 8)
     $run.state=$state
     return $run
@@ -54,7 +54,7 @@ function Get-TracePresentation {
         }
         'Completed' {
             $path=Join-Path $Run.directory 'trace.etl'
-            if((Test-Path -LiteralPath $path -PathType Leaf) -and $State.bytes -gt 0 -and (Get-Item -LiteralPath $path).Length -eq $State.bytes -and $State.sha256 -match '^[a-fA-F0-9]{64}$'){
+            if((Test-Path -LiteralPath $path -PathType Leaf) -and $State.bytes -gt 0 -and (Get-Item -LiteralPath $path).Length -eq $State.bytes -and $State.sha256 -match '^[a-fA-F0-9]{64}$' -and (-not $State.usb.requested -or ($State.usb.status -eq 'Completed' -and (Test-Path -LiteralPath (Join-Path $Run.directory 'usb.etl')) -and $State.usb.bytes -gt 0 -and $State.usb.sha256 -match '^[a-fA-F0-9]{64}$' -and (Get-Item -LiteralPath (Join-Path $Run.directory 'usb.etl')).Length -eq $State.usb.bytes))){
                 $phase='Completed';$busy=$false;$canStop=$false;$canOpen=$true;$indeterminate=$false
                 $text='WPRの停止・保存が完了しました（'+[Math]::Round($State.bytes/1MB,1)+' MB）。「WPRの保存先を開く」でtrace.etlを確認できます。'
             }else{$phase='Failed';$busy=$false;$canStop=$false;$canOpen=$true;$indeterminate=$false;$text='保存完了の記録とETLファイルが一致しません。保存先を開いて確認してください。'}
@@ -76,6 +76,7 @@ function Get-TracePresentation {
     }elseif($busy -and $phase -eq 'Launching' -and $age -ge 15){
         $text='WPRの開始結果を待っています（'+$age+'秒経過）。管理者権限の確認、または保存先の状態を確認してください。';$canOpen=$true
     }
+    if($State.usb.requested -or $State.includeUsb){$text='USB＋Audio：'+$text}
     if($ReadError -and $busy){$text+=' 状態ファイルを読めないため再確認中です。';$canOpen=$true}
     [pscustomobject]@{phase=$phase;busy=$busy;canStop=$canStop;canOpen=$canOpen;text=$text;indeterminate=$indeterminate}
 }

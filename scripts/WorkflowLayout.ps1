@@ -50,8 +50,8 @@ $settingsLayout=New-Object Windows.Forms.TableLayoutPanel;$settingsLayout.Dock='
 [void]$settingsLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100)));[void]$settingsLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',52)))
 $settingsTabs=New-Object Windows.Forms.TabControl;$settingsTabs.Dock='Fill';$settingsLayout.Controls.Add($settingsTabs,0,0);$settingsPage.Controls.Add($settingsLayout)
 $audioTab=New-AudioSettingsTab;$testTab=New-UiPage '比較する条件';$btTab=New-UiPage 'Bluetooth（任意）'
-$evidenceTab=New-PlaybackConditionsTab
-$settingsTabs.TabPages.AddRange([Windows.Forms.TabPage[]]@($audioTab,$testTab,$btTab,$evidenceTab))
+$evidenceTab=New-PlaybackConditionsTab;$followUpTab=New-FollowUpTab
+$settingsTabs.TabPages.AddRange([Windows.Forms.TabPage[]]@($audioTab,$followUpTab,$testTab,$btTab,$evidenceTab))
 $settingsNext=New-UiButton '3 調査画面へ';$settingsLayout.Controls.Add($settingsNext,0,1);$settingsNext.Add_Click({$tabs.SelectedTab=$runPage})
 $testGrid=New-UiGrid @(44,140,44,44,44,100,44,52) 180
 $testChoice=New-UiCombo @($script:definitions|ForEach-Object {$_.title});$guide=New-UiLabel '';$guide.Dock='Fill';$guide.AutoSize=$false
@@ -111,6 +111,7 @@ $report=New-UiButton '報告書を開く';$folder=New-UiButton '記録フォル�
 $fileActions=New-Object Windows.Forms.FlowLayoutPanel;$fileActions.Dock='Fill';$fileActions.Controls.AddRange([Windows.Forms.Control[]]@($report,$folder));$exportGrid.Controls.Add($fileActions,1,2)
 $includeTraces=New-Object Windows.Forms.CheckBox;$includeTraces.Text='詳細ETLも含める（プロセス名・パスなどの情報を含む場合があります）';$includeTraces.Dock='Fill';$exportGrid.Controls.Add($includeTraces,0,3);$exportGrid.SetColumnSpan($includeTraces,2)
 $export=New-UiButton 'ZIPを書き出して場所を開く';$exportGrid.Controls.Add($export,1,4)
+$includeTraces.Add_CheckedChanged({Update-UiState})
 Add-UiGuide $exportGrid 5 "保存先は data/exports/ です。音声・動画も含むため、共有する相手と内容を確認してください。`r`nエージェントが同じPCにある場合は data/sessions/ を直接解析することもできます。"
 $exportPage.Controls.Add($exportGrid)
 $tabs.Add_SelectedIndexChanged({if($script:uiReady -and $tabs.SelectedTab -in @($settingsPage,$reviewPage) -and -not $script:activeTest -and -not $script:audioPlayback -and $audioOutput.Items.Count -eq 0){Refresh-AudioOutputs};Update-UiState})

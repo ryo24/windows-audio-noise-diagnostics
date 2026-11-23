@@ -12,6 +12,22 @@ $temporary=Join-Path (Join-Path $root 'test-output') ('integration-'+[guid]::New
 [IO.Directory]::CreateDirectory($temporary)|Out-Null
 $receiver=$null;$connections=New-Object 'System.Collections.Generic.List[object]'
 try {
+    Add-Type -TypeDefinition @'
+public static class AtomicReaderFixture {
+    public static System.Threading.Thread Hold(string path, int milliseconds) {
+        var stream=System.IO.File.Open(path,System.IO.FileMode.Open,System.IO.FileAccess.Read,System.IO.FileShare.Read);
+        var thread=new System.Threading.Thread(delegate(){System.Threading.Thread.Sleep(milliseconds);stream.Dispose();});
+        thread.Start();return thread;
+    }
+}
+'@
+    $atomicPath=Join-Path $temporary 'atomic.json';Write-AtomicText $atomicPath '{"saved":1}'
+    $reader=[AtomicReaderFixture]::Hold($atomicPath,200)
+    Write-AtomicText $atomicPath '{"saved":2}';$reader.Join()
+    Assert-Integration ((Get-Content $atomicPath -Raw|ConvertFrom-Json).saved -eq 2) 'Atomic saves wait for a concurrent trace reader and retain valid JSON'
+    $reader=[IO.File]::OpenRead($atomicPath);$blocked=$false
+    try {Write-AtomicText $atomicPath '{"saved":3}'}catch{$blocked=$true}finally{$reader.Dispose()}
+    Assert-Integration ($blocked -and (Get-Content $atomicPath -Raw|ConvertFrom-Json).saved -eq 2 -and @(Get-ChildItem $temporary -Filter '*.tmp').Count -eq 0) 'A persistent read lock fails within a bound without changing the saved original or leaving temporary files'
     $session=New-DiagnosticSession ([pscustomobject]@{speakerModel='fixture';cStates='Unknown'})
     $directory=Join-Path $temporary 'session';Save-Session $session $directory
     $run=New-TraceRun $directory $session.id;Send-TraceStopRequest $run

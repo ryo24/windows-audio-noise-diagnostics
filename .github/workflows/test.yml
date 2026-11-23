@@ -25,6 +25,12 @@ jobs:
       - name: Test trace IPC, playback warnings and concurrent phone connections
         shell: powershell
         run: .\tests\Run-IntegrationTests.ps1
+      - name: Test indexed reference and bounded USB traces
+        shell: powershell
+        run: .\tests\Run-FollowUpTests.ps1
+      - name: Exercise linked follow-up recording and USB capture
+        shell: powershell
+        run: .\scripts\Start-Diagnostics.ps1 -SmokeTest -ExerciseFollowUpWorkflow
       - name: Exercise WPR stop and save state transitions
         shell: powershell
         run: .\scripts\Start-Diagnostics.ps1 -SmokeTest -ExerciseTraceWorkflow
