@@ -55,6 +55,38 @@ try{
   await until(()=>fs.existsSync(path.join(directory,'received-2.json')));
   const second=JSON.parse(fs.readFileSync(path.join(directory,'received-2.json'),'utf8'));assert.equal(second.MimeType,'audio/wav');assert.equal(second.CaptureStartedUtc,'');
   console.log('PASS: insecure-context fallback hides unavailable direct recording and imports a selected local file');
+  await until(()=>evaluate('!PhoneTransfer.busy && document.getElementById("status").textContent.includes("PCへ送信しました")'));
+  // Fail a real browser request before it reaches the receiver. The log
+  // must retain a missing HTTP response without assigning a firewall cause.
+  await command('Network.setBlockedURLs',{urls:[url+'upload']});
+  await evaluate('document.getElementById("note").value="PRIVATE_NOTE";document.getElementById("send").click()');
+  await until(()=>evaluate('!PhoneTransfer.busy && document.getElementById("status").textContent.includes("HTTP応答を確認できません")')).catch(async error=>{console.log(await evaluate('JSON.stringify({status:document.getElementById("status").textContent,busy:PhoneTransfer.busy,log:PhoneTransfer.getDiagnostics()})'));throw error;});
+  let log=await evaluate('PhoneTransfer.getDiagnostics()');
+  assert.equal(log.attempts.at(-1).outcome,'NetworkError');
+  assert.ok(log.attempts.at(-1).events.some(e=>e.stage==='RequestStarted'));
+  assert.ok(!log.attempts.at(-1).events.some(e=>e.stage==='ResponseReceived'));
+  console.log('PASS: blocked upload retains browser stages and missing HTTP response without inventing a cause');
+  await command('Network.setBlockedURLs',{urls:[]});
+  await evaluate('document.getElementById("check-receiver").click()');
+  await until(()=>evaluate('!PhoneTransfer.busy && document.getElementById("status").textContent.includes("PCの受付からHTTP応答")'));
+  const unreadable=await evaluate('PhoneTransfer.upload({size:12,type:"video/mp4",slice:()=>({arrayBuffer:()=>Promise.reject(new DOMException("PRIVATE_ERROR_URL","NotReadableError"))})},{})');
+  assert.equal(unreadable.reason,'FileReadError');
+  log=await evaluate('PhoneTransfer.getDiagnostics()');
+  assert.ok(!log.attempts.at(-1).events.some(e=>e.stage==='RequestStarted'));
+  assert.ok(!JSON.stringify(log).match(/PRIVATE_NOTE|PRIVATE_ERROR_URL|fixture\.wav|\/s\//));
+  await command('Browser.setDownloadBehavior',{behavior:'allow',downloadPath:directory});
+  await evaluate('document.getElementById("download-diagnostics").click()');
+  await until(()=>fs.readdirSync(directory).some(name=>name.startsWith('audio-noise-transfer_') && name.endsWith('.json')));
+  const downloaded=JSON.parse(fs.readFileSync(path.join(directory,fs.readdirSync(directory).find(name=>name.startsWith('audio-noise-transfer_') && name.endsWith('.json'))),'utf8'));
+  assert.deepEqual(downloaded,log);
+  assert.ok(downloaded.attempts.some(a=>a.kind==='Health' && a.outcome==='Completed'));
+  console.log('PASS: file-read failure and health check are distinct; actual downloaded diagnostics omit private content');
+  const unsupported=path.join(directory,'unsupported.mp4');fs.writeFileSync(unsupported,'unsupported synthetic media bytes');
+  await command('DOM.setFileInputFiles',{nodeId:input.nodeId,files:[unsupported]});
+  await evaluate('document.getElementById("send").click()');
+  await until(()=>evaluate('!PhoneTransfer.busy && document.getElementById("status").textContent.includes("HTTP 415")'));
+  assert.equal((await evaluate('PhoneTransfer.getDiagnostics()')).attempts.at(-1).outcome,'HttpError');
+  console.log('PASS: actual server HTTP rejection is shown separately from a connection failure');
   await command('Network.emulateNetworkConditions',{offline:false,latency:0,downloadThroughput:-1,uploadThroughput:-1});
   const phoneShot=await command('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});fs.writeFileSync(path.join(directory,'phone.png'),Buffer.from(phoneShot.data,'base64'));
   await command('Emulation.setDeviceMetricsOverride',{width:1000,height:1000,deviceScaleFactor:1,mobile:false});await command('Page.navigate',{url:url+'pc'});

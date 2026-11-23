@@ -1,5 +1,6 @@
-<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>音声ノイズをスマホで記録</title><link rel="stylesheet" href="web.css"><script defer src="phone.js"></script></head><body><main>
-<p class="eyebrow">LOCAL AUDIO DIAGNOSTICS</p><h1>スピーカーの音を記録</h1><p>PCと同じWi-Fi内だけで受け渡します。音声・動画を外部クラウドへ送りません。スピーカー近くで短く録音し、送信前に聞き直してください。</p>
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>音声ノイズをスマホで記録</title><link rel="stylesheet" href="web.css"><script defer src="transfer.js"></script><script defer src="phone.js"></script></head><body><main>
+<p class="eyebrow">LOCAL AUDIO DIAGNOSTICS</p><h1>スピーカーの音を記録</h1><p>PCと同じLAN内で受け渡します（PCは有線LAN、スマホはWi-Fiでも利用可能）。音声・動画を外部クラウドへ送りません。</p>
+<section><h2>接続の許可を確認</h2><p>スマホで「付近のデバイス」や「ローカルネットワーク」へのアクセス許可を求められたら、このPCへ接続するために許可してください。録音用のマイク許可とは別です。</p><p>拒否した場合は、Androidの「設定 → アプリ → Chrome → 権限」、Chromeのこのページの「サイトの設定／権限」を確認します。項目名や有無はOS・ブラウザーの版によって異なります。アプリからAndroid側の許可状態は自動判定できません。</p><button id="check-receiver" class="secondary">PCの受付へ接続テスト</button></section>
 <section><h2>1. 録音または撮影</h2><p id="direct-note">録音方法を確認しています。</p><div id="direct-controls" hidden><button id="record-start">ブラウザーで録音開始</button><button id="record-stop" disabled>録音停止</button></div>
 <label class="file-button">音声を録音・選択<input id="audio-file" type="file" accept="audio/*" capture="user"></label>
 <label class="file-button">カメラで動画を撮影<input id="video-file" type="file" accept="video/*" capture="environment"></label>
@@ -9,5 +10,6 @@
 <label><input id="confirmed" type="checkbox">この記録を再生して内容を確認した</label>
 <label>ノイズの聞こえ方<select id="heard"><option value="Unknown">判断できない・未確認</option><option value="Yes">ノイズが聞こえる</option><option value="No">ノイズは聞こえない</option></select></label>
 <label>備考（任意）<textarea id="note" maxlength="1000" placeholder="スピーカーからの距離、Bluetoothの条件など"></textarea></label></section>
-<section><h2>3. PCへ送る</h2><p>受信中のPCへ直接送ります。信頼できる自宅などのWi-Fiで使用してください。このLAN内HTTP転送は暗号化されません。QRの受付は15分で終了します。</p><button id="send" disabled>この記録をPCへ送信</button><p id="status" role="status" aria-live="polite">記録を選ぶと送信できます。</p></section>
+<section><h2>3. PCへ送る</h2><p>受信中のPCへ直接送ります。信頼できる自宅などのLANで使用してください。このLAN内HTTP転送は暗号化されません。QRの受付は15分で終了します。</p><button id="send" disabled>この記録をPCへ送信</button><button id="cancel-send" class="secondary" disabled>送信を中止</button><p id="status" role="status" aria-live="polite">記録を選ぶと送信できます。</p>
+<details><summary>送信できないときのログを持ち帰る</summary><p>失敗を再現した直後に「送信ログを保存」を押します。AndroidでダウンロードしたJSONをUSB等でPCへコピーし、PCアプリの「接続診断を保存 → スマホの送信ログを選択」で取り込み、診断を保存してZIPを書き出してください。</p><p>ログは送信段階・バイト数・HTTP応答の有無・ブラウザー系統と版を含みます。音声・動画、ファイル名、備考、IP、受付URL、トークン、Cookieは含めず、自動送信もしません。スマホの時計はPCと同期済みとは扱いません。</p><button id="download-diagnostics" class="secondary">送信ログを保存</button></details></section>
 </main></body></html>

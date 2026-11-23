@@ -29,6 +29,8 @@ session/
 
 スマホ接続の診断を保存すると、`session.json.networkDiagnostics`へ追記し、`network-diagnostics.json`にも同じ内容を出力します。正式な記録はsession.jsonです。選んだPCのLAN内IP・ポート、接続の分類、手動のエラー文等が通常ZIPに含まれるため、共有前に内容を確認してください。受付URL／トークン・受信元IP・Cookieは保存しません。解析ではPC内自己テスト、PC以外からの到達、HTTP応答を区別し、自己テストの成功だけでスマホの到達を判断しません。[接続診断の記録範囲](phone-connection-troubleshooting.md)を参照してください。
 
+スマホの送信ログを明示的に取り込んだ場合は、同じ診断の`browserUploadDiagnostics`に検証済みの項目を保存します。PC側の`AttemptId`とスマホ側の`attempts[].id`が一致した場合だけ同じ送信として照合できます。IDがPCへ届いていない場合は未取得のまま残し、スマホUTCとPCの時計を直接一致させません。PCの`HeaderBytes`／`BodyBytes`とブラウザーの`loadedBytes`は別々の観測です。送出完了を受信・保存完了とは扱いません。
+
 ## 対象PCにエージェントがある場合
 
 ZIPを作る必要はありません。調査を止めたうえで、対象の`data/sessions/<session-id>/session.json`と、同じフォルダーの`audio/`・`physical/`・`traces/`を解析対象に指定します。解析結果は`data/analysis/<case>/`へ保存し、原本へ追記しません。

@@ -5,8 +5,9 @@ namespace AudioNoiseDiagnostics {
         public override string ToString(){return Address;}
     }
     public sealed class ReceiverNetworkEvent {
-        public string Utc, Kind, Peer, Route, Reason, Browser;
+        public string Utc, Kind, Peer, Route, Reason, Browser, ConnectionId, Method, AttemptId;
         public int HttpStatus, BrowserMajor;
+        public long HeaderBytes, BodyBytes, ExpectedBytes;
     }
     public sealed class ReceiverNetworkSnapshot {
         public string StartedUtc, LastOtherDeviceUtc, EndReason, LastError;

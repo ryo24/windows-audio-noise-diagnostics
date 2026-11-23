@@ -96,7 +96,7 @@ Add-UiGuide $physicalGrid 0 "「3 調査する」のスマホタブで受信し�
 $moves=@($receiveGrid.Controls|Where-Object {$receiveGrid.GetRow($_) -ge 4})
 foreach($control in $moves){$row=$receiveGrid.GetRow($control)-3;$column=$receiveGrid.GetColumn($control);$span=$receiveGrid.GetColumnSpan($control);$physicalGrid.Controls.Add($control,$column,$row);$physicalGrid.SetColumnSpan($control,$span)}
 $receiveGrid.RowStyles[3].Height=94
-$receiveGrid.Height=282;$receiveGrid.MinimumSize=New-Object Drawing.Size(0,282);$receiveGrid.RowCount=4
+$receiveGrid.Height=306;$receiveGrid.MinimumSize=New-Object Drawing.Size(0,306);$receiveGrid.RowCount=4
 while($receiveGrid.RowStyles.Count -gt 4){$receiveGrid.RowStyles.RemoveAt(4)}
 $phoneTab.Text='スマホをつなぐ（任意）';$phoneStart.Text='スマホからの受信を開く';$phoneStatus.Text='先に「1 準備する」で記録を作成してください。';$physicalPlay.Text='取り込んだ実音を再生'
 $physicalTab.Controls.Add($physicalGrid)

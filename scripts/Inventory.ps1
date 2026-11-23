@@ -9,6 +9,7 @@
 . (Join-Path $PSScriptRoot 'TraceUiState.ps1')
 . (Join-Path $PSScriptRoot 'PlaybackReview.ps1')
 . (Join-Path $PSScriptRoot 'PhoneNetwork.ps1')
+. (Join-Path $PSScriptRoot 'BrowserUploadLog.ps1')
 
 function Invoke-CollectionSection {
     param([scriptblock]$Read)

@@ -83,8 +83,10 @@ if($exercise){
         Wait-Ui {@($script:session.physicalRecordings).Count -eq 1} 15
         Assert-Ui (-not $collect.Enabled -and -not $resume.Enabled -and -not $export.Enabled) 'Reception must prevent changing sessions or exporting unfinished data.'
         Save-UiProof 'phone-receiving'
+        $script:phoneLogFixture=Join-Path $script:ToolRoot 'tests/fixtures/browser-upload-log.json'
         $phoneDiagnose.PerformClick()
         Assert-Ui (@($script:session.networkDiagnostics).Count -eq 1 -and $script:session.networkDiagnostics[0].localHttpSelfTest.httpStatus -eq 200) 'Phone connection diagnosis must persist a local self-test and receiver events without requiring a smartphone connection.'
+        Assert-Ui ($script:session.networkDiagnostics[0].browserUploadDiagnostics.attempts[0].outcome -eq 'NetworkError') 'Imported browser upload diagnostics must be saved with the PC diagnosis.'
         $tabs.SelectedTab=$reviewPage;$reviewTabs.SelectedTab=$physicalTab
         $physicalReviewed.Checked=$true;$physicalHeard.SelectedIndex=1;$physicalRoute.Text='Synthetic UI test';$physicalSave.PerformClick()
         $form.Close()
