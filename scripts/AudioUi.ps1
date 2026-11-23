@@ -47,7 +47,8 @@ function Update-AudioUi {
     foreach($control in @($audioOutput,$audioSource,$audioLength,$audioConsent)){$control.Enabled=(-not $locked -and $recording)}
     $audioInput.Enabled=(-not $locked -and $recording -and $audioSource.SelectedIndex -eq 1)
     $audioRefresh.Enabled=(-not $locked);$reviewRefresh.Enabled=(-not $locked)
-    $audioConsent.Text=if($audioSource.SelectedIndex -eq 1){'マイクが拾う会話・周囲の音も録音することを確認しました'}else{'選んだ出力に流れる他アプリ・通知の音も録音することを確認しました'}
+    $audioConsent.Text=if($recording){'この範囲の音を録音してよい（左の四角をクリック）'}else{'録音なしではチェック不要'}
+    $audioConsentHelp.Text=if(-not $recording){'音声は録音しません。この確認は不要です。「3 調査する」で開始してください。'}elseif($audioSource.SelectedIndex -eq 1){"録音対象：選んだマイクが拾うスピーカー音・会話・周囲の音です。`r`n録音に入れたくない会話などを避け、問題なければ下の四角をクリックしてください。`r`n事前に録音テストをする必要はありません。チェック後は「3 調査する」で開始します。"}else{"録音対象：選んだ出力から流れる音すべてです（テスト音声・動画・通知など）。`r`n入れたくない音の再生を止め、問題なければ下の四角をクリックしてください。`r`n事前に録音テストをする必要はありません。チェック後は「3 調査する」で開始します。"}
     $probe=Get-SelectedAudioProbe
     $audioRecords.Enabled=(-not $occupied)
     $reviewOutput.Enabled=(-not $occupied -and -not $script:activeTest)
@@ -124,7 +125,7 @@ function Start-AudioReview {
 }
 function New-AudioSettingsTab {
     $tab=New-UiPage '音の調べ方'
-    $grid=New-UiGrid @(82,46,46,46,46,56,64) 190
+    $grid=New-UiGrid @(82,46,46,46,46,56,108,52) 190
     Add-UiGuide $grid 0 "ここでは条件を選ぶだけです。開始ボタンは「3 調査する」に一つだけあります。`r`nテスト音声：PCが共通の音を流して録音。アプリの音：自分でアプリを再生。`r`n録音なし：耳で確認し、ノイズ時刻・構成・Bluetooth状態を記録します。"
     $script:audioMode=New-UiCombo @('テスト音声で調べる（再生＋録音）','普段のアプリの音を調べる（録音）','録音せず、耳で確認する')
     $script:audioSource=New-UiCombo @('Windows内部の音（ループバック）','接続したマイクで拾う実音')
@@ -136,7 +137,8 @@ function New-AudioSettingsTab {
     $options=New-Object Windows.Forms.FlowLayoutPanel;$options.Dock='Fill'
     $audioLength.Dock='None';$audioLength.Width=85;$options.Controls.Add($audioLength);$options.Controls.Add((New-UiLabel '秒で録音と観察を終了'))
     $script:audioRefresh=New-UiButton '音声デバイスを再取得';$options.Controls.Add($audioRefresh);Add-UiField $grid 5 '録音の長さ' $options
-    $script:audioConsent=New-Object Windows.Forms.CheckBox;$audioConsent.Dock='Fill';$audioConsent.Padding=New-Object Windows.Forms.Padding(8);$grid.Controls.Add($audioConsent,0,6);$grid.SetColumnSpan($audioConsent,2)
+    $script:audioConsentHelp=New-UiLabel '';$audioConsentHelp.Dock='Fill';$audioConsentHelp.AutoSize=$false;$grid.Controls.Add($audioConsentHelp,0,6);$grid.SetColumnSpan($audioConsentHelp,2)
+    $script:audioConsent=New-Object Windows.Forms.CheckBox;$audioConsent.Dock='Fill';$audioConsent.Padding=New-Object Windows.Forms.Padding(8);$grid.Controls.Add($audioConsent,0,7);$grid.SetColumnSpan($audioConsent,2)
     $script:audioSetupStatus=New-UiLabel '音声デバイスを読み込みます。';$audioSetupStatus.Dock='Top';$audioSetupStatus.Height=54;$audioSetupStatus.AutoSize=$false
     $tab.Controls.Add($audioSetupStatus);$tab.Controls.Add($grid)
     $audioRefresh.Add_Click({Refresh-AudioOutputs})

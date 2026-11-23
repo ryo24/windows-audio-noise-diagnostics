@@ -6,7 +6,7 @@
     if($audioMode.SelectedIndex -ne 2){
         if(($audioSource.SelectedIndex -eq 0 -or $audioMode.SelectedIndex -eq 0) -and $audioOutput.SelectedIndex -lt 0){return '「2 条件を設定 → 音の調べ方」で音声出力を選んでください。'}
         if($audioSource.SelectedIndex -eq 1 -and $audioInput.SelectedIndex -lt 0){return '「2 条件を設定 → 音の調べ方」でマイクを選んでください。'}
-        if(-not $audioConsent.Checked){return '「2 条件を設定 → 音の調べ方」で録音範囲を確認し、チェックを入れてください。'}
+        if(-not $audioConsent.Checked){return '「2 条件を設定 → 音の調べ方」の説明を読み、録音してよければ「この範囲の音を録音してよい」にチェックしてください。'}
     }
     return ''
 }
