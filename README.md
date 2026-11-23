@@ -167,6 +167,8 @@ CSV・JSON・報告書の時刻はUTCです。日本時間は9時間を加算し
 
 ## 開発と検証
 
+UIの構成・操作・状態遷移を変更する前に、[UI設計の方針](docs/ui-design-policy.md)を参照してください。設計上の判断基準と変更時の確認項目をまとめています。利用者向けの手順は[操作ガイド](docs/user-guide.md)です。
+
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-Tests.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-DataTests.ps1
