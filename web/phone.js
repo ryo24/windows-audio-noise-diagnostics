@@ -42,22 +42,40 @@ $('record-start').addEventListener('click', async () => {
   } catch { if (mediaStream) mediaStream.getTracks().forEach(track => track.stop()); $('record-start').disabled = false; for (const id of ['audio-file', 'video-file', 'saved-file']) $(id).disabled = false; setStatus('マイクを使えませんでした。端末の録音・カメラ、または保存済みファイルを利用してください。'); }
 });
 $('record-stop').addEventListener('click', () => { if (recorder && recorder.state !== 'inactive') recorder.stop(); });
-$('send').addEventListener('click', async () => {
-  if (!selected) return;
-  $('send').disabled = true; setStatus('PCへ送信中です。画面を閉じずにお待ちください。');
-  try {
-    const response = await fetch(new URL('upload', location.href), {method: 'POST', body: selected, headers: {
-      'Content-Type': 'application/octet-stream', 'X-Client-Sent-Utc': new Date().toISOString(),
-      'X-Capture-Started-Utc': captureStarted, 'X-Capture-Ended-Utc': captureEnded,
-      'X-Preview-Confirmed': String($('confirmed').checked), 'X-Heard-Noise': $('heard').value, 'X-Note': encodeURIComponent($('note').value)
-    }});
-    if (!response.ok) throw new Error(response.status === 413 ? 'TooLarge' : response.status === 415 ? 'Format' : 'Receive');
-    const result = await response.json();
-    if (!result.received) throw new Error('Receive');
-    setStatus('PCへ送信しました。PCアプリの「4 聞き直し・結果」で確認できます。スマホの元ファイルは消しません。');
-  } catch (error) {
-    setStatus(error.message === 'Format' ? 'この形式を受け取れません。音声・動画ファイルを選び直してください。' : '送信できませんでした。PCの受付、同じWi-Fi、ファイアウォール、QRの期限を確認して再送してください。元の記録は残っています。');
-    $('send').disabled = false;
-  }
+function showTransferResult(result, check = false) {
+  if (result.ok) { setStatus(check ? 'PCの受付からHTTP応答がありました。ファイル送信とは別の確認です。' : 'PCへ送信しました。PCアプリの「4 聞き直し・結果」で確認できます。スマホの元ファイルは消しません。'); return; }
+  const messages = {
+    FileReadError:'選択したファイルを読み出せませんでした。端末に保存してから「保存済みの音声・動画を選択」で選び直してください。',
+    NetworkError:'HTTP応答を確認できません。スマホの接続許可・受付・通信経路等が候補ですが、原因は未確定です。',
+    Timeout:'応答待ちの制限時間に達しました。送信途中か保存後かはPC側の記録も確認してください。',
+    Aborted:'送信を中止しました。PCで保存済みの場合もあるため、再送前にPCの一覧を確認してください。',
+    InvalidResponse:'PCの応答形式を確認できませんでした。PC側の受信一覧も確認してください。'
+  };
+  const httpMessages={400:'PCが要求を受け付けませんでした。',404:'受付URLが無効か期限切れの可能性があります。最新QRを開き直してください。',413:'ファイルが128MBを超えています。短く撮影し直してください。',415:'PCがこの形式を受け付けません。別の音声・動画を選んでください。',429:'PCの受付上限に達しました。受信一覧を確認し、必要なら受付を開き直してください。'};
+  setStatus((result.status ? `HTTP ${result.status}：`+(httpMessages[result.status] || 'PCが送信を受け付けませんでした。') : messages[result.reason] || '送信を完了できませんでした。')+'\n「送信ログを保存」とPCの「接続診断を保存」でログを持ち帰れます。元の記録は残っています。');
+}
+document.addEventListener('transfer-state', () => {
+  const busy=PhoneTransfer.busy;
+  $('send').disabled=busy || !selected; $('check-receiver').disabled=busy; $('cancel-send').disabled=!busy;
+  for (const id of ['audio-file','video-file','saved-file','record-start']) $(id).disabled=busy || !!mediaStream;
+  const attempts=PhoneTransfer.getDiagnostics().attempts, attempt=attempts[attempts.length-1], last=attempt && attempt.events[attempt.events.length-1];
+  if(busy && last && last.stage==='UploadProgress') setStatus(`送信中：ブラウザーの送出量 ${(last.loadedBytes/1024/1024).toFixed(1)} MB。PCでの保存完了はまだ未確認です。`);
+  if(busy && last && last.stage==='UploadBodySent') setStatus('ブラウザーがファイルを送出しました。PCで保存したという応答を待っています。');
 });
-window.addEventListener('pagehide', () => { if (mediaStream) mediaStream.getTracks().forEach(track => track.stop()); });
+$('send').addEventListener('click', async () => {
+  if (!selected || PhoneTransfer.busy) return;
+  setStatus('ファイルを読み出し、PCへ送信します。画面を閉じずにお待ちください。');
+  const result=await PhoneTransfer.upload(selected,{
+    'Content-Type':'application/octet-stream','X-Client-Sent-Utc':new Date().toISOString(),
+    'X-Capture-Started-Utc':captureStarted,'X-Capture-Ended-Utc':captureEnded,
+    'X-Preview-Confirmed':String($('confirmed').checked),'X-Heard-Noise':$('heard').value,'X-Note':encodeURIComponent($('note').value)
+  });
+  showTransferResult(result);
+});
+$('check-receiver').addEventListener('click', async () => {setStatus('PCの受付へ接続を確認しています。');showTransferResult(await PhoneTransfer.check(),true);});
+$('cancel-send').addEventListener('click',()=>PhoneTransfer.cancel());
+$('download-diagnostics').addEventListener('click',()=>{
+  const url=URL.createObjectURL(new Blob([JSON.stringify(PhoneTransfer.getDiagnostics(),null,2)],{type:'application/json'}));
+  const link=document.createElement('a');link.href=url;link.download='audio-noise-transfer_'+new Date().toISOString().replace(/[^0-9TZ]/g,'')+'.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),10000);
+});
+window.addEventListener('pagehide', () => { PhoneTransfer.cancel(); if (mediaStream) mediaStream.getTracks().forEach(track => track.stop()); });

@@ -42,13 +42,15 @@ namespace AudioNoiseDiagnostics {
         public string FormatNote = "Windows共有モードのミックス形式。DACの物理ビット深度や音声拡張の状態を示す値ではありません。";
     }
     public static class Endpoint {
-        public static EndpointInfo Read() {
+        public static EndpointInfo Read() { return Read(null); }
+        public static EndpointInfo Read(string endpointId) {
             object enumerator = null, audio = null;
             IDevice device = null;
             IntPtr format = IntPtr.Zero;
             try {
                 enumerator = new Enumerator();
-                Marshal.ThrowExceptionForHR(((IDeviceEnumerator)enumerator).GetDefaultAudioEndpoint(0, 1, out device));
+                if(String.IsNullOrEmpty(endpointId)) Marshal.ThrowExceptionForHR(((IDeviceEnumerator)enumerator).GetDefaultAudioEndpoint(0, 1, out device));
+                else Marshal.ThrowExceptionForHR(((IDeviceEnumerator)enumerator).GetDevice(endpointId, out device));
                 var result = new EndpointInfo();
                 Marshal.ThrowExceptionForHR(device.GetId(out result.Id));
                 Guid iid = typeof(IAudioClient).GUID;

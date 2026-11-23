@@ -1,4 +1,4 @@
-﻿param([switch]$SmokeTest, [string]$ScreenshotPath, [switch]$ExerciseWorkflow, [switch]$ExerciseAudioWorkflow, [switch]$ExercisePhoneWorkflow, [switch]$ExerciseExportWorkflow, [switch]$ExerciseUxWorkflow, [switch]$ExerciseTraceWorkflow, [ValidateSet('Prepare','Tests','Bluetooth','Audio','Phone','Evidence','Run','Review','Export')][string]$ScreenshotTab='Prepare')
+﻿param([switch]$SmokeTest, [string]$ScreenshotPath, [switch]$ExerciseWorkflow, [switch]$ExerciseAudioWorkflow, [switch]$ExercisePhoneWorkflow, [switch]$ExerciseExportWorkflow, [switch]$ExerciseUxWorkflow, [switch]$ExerciseTraceWorkflow, [switch]$ExerciseFollowUpWorkflow, [ValidateSet('Prepare','Tests','Bluetooth','Audio','Phone','Evidence','Run','Review','Export')][string]$ScreenshotTab='Prepare')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Core.ps1')
 . (Join-Path $PSScriptRoot 'Inventory.ps1')
@@ -71,7 +71,13 @@ function Set-ProfileControls {
 }
 function Save-CurrentSession {
     if ($script:session) {
+        if($script:traceRun.state.link.testId){
+            $linked=@($script:session.tests|Where-Object {$_.id -eq $script:traceRun.state.link.testId})
+            $probe=@($script:session.audioProbes|Where-Object {$_.id -eq $script:traceRun.state.link.probeId})
+            if($linked.Count -eq 1 -and $probe.Count -eq 1 -and $linked[0].followUp){$linked[0].followUp|Add-Member -NotePropertyName traceCoverage -NotePropertyValue (Get-FollowUpCoverage $script:traceRun.state $probe[0]) -Force}
+        }
         Save-Session $script:session $script:sessionDirectory
+        Refresh-FollowUpReferences
         $recordCount.Text=('保存済みの比較: ' + @($script:session.tests).Count + ' 件　／　記録は data フォルダー内（非公開）')
         $history.Text=($script:session.tests | ForEach-Object { $_.id + "`r`n" + $_.kind + ' / ' + (Get-ResultLabel $_.result) + ' / ' + $_.durationSeconds + '秒 / ノイズ ' + @($_.noiseUtc).Count + "回`r`n" + $_.change + "`r`n" }) -join "`r`n"
     }
@@ -192,6 +198,7 @@ $start.Add_Click({
         if(-not (Test-CaptureReady)){throw '録音先と録音範囲を確認してください。'}
         $test.defaultEndpoint=Invoke-CollectionSection { Get-DefaultEndpoint }
         $test.conditions=Get-ManualPlaybackConditions
+        $test|Add-Member -NotePropertyName followUp -NotePropertyValue (Get-FollowUpPlan)
         $test|Add-Member -NotePropertyName capturePlan -NotePropertyValue ([pscustomobject]@{method=@('Reference','ExternalApp','ObservationOnly')[$audioMode.SelectedIndex];source=if($audioMode.SelectedIndex -eq 2){$null}elseif($audioSource.SelectedIndex -eq 1){'Microphone'}else{'Loopback'};maximumSeconds=if($audioMode.SelectedIndex -eq 2){$null}else{[int]$audioLength.SelectedItem};recordingConsent=($audioMode.SelectedIndex -ne 2 -and $audioConsent.Checked)})
         $test.playbackSnapshots=@(Invoke-CollectionSection {Get-PlaybackSnapshot $script:session.id})
         $test.bluetoothCondition=$script:btConditions[$btCondition.SelectedIndex]; $test.inputActivity=$script:inputActivities[$inputActivity.SelectedIndex]
@@ -204,6 +211,12 @@ $start.Add_Click({
         $script:bluetoothMonitor=Start-BluetoothMonitor -Salt $script:session.id -InventoryPath (Join-Path $PSScriptRoot 'Inventory.ps1') -MaxSamples $test.bluetoothSampling.maxSamples
         $script:finishRequested=$false
         Start-ObservationCapture $test.id
+        if($test.followUp.kind -eq 'UsbTransfer'){
+            $link=[pscustomobject]@{testId=$test.id;probeId=$script:recordingProbe.id;endpointRef=(Get-AnonymousDeviceRef ('SWD\MMDEVAPI\'+$audioOutput.SelectedItem.Id) $script:session.id)}
+            Start-LinkedTrace -IncludeUsb -Link $link
+            $test.followUp.traceId=$script:traceRun.id
+            Save-CurrentSession
+        }
         $script:contextTest=$test;Start-CollectionWorker 'context'
         $tabs.SelectedTab=$runPage
         $runAudioStatus.Text=if($audioMode.SelectedIndex -eq 2){'音声録音は行いません。ノイズ時刻と状態の記録を開始しました。'}else{'録音を開始しています。設定した秒数で録音と観察が自動終了します。'}

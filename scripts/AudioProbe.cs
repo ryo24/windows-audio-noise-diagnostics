@@ -288,18 +288,30 @@ namespace AudioNoiseDiagnostics {
                 return result.ToArray();
             } finally { if(raw!=IntPtr.Zero)Marshal.Release(raw);NativeAudio.Release(collection);NativeAudio.Release(enumerator); }
         }
-        public static void GenerateReference(string path) {
+        public static void GenerateReference(string path) { GenerateReference(path,10,false); }
+        public static void GenerateFollowUpReference(string path,int seconds) {
+            if(seconds<10||seconds>300||seconds%10!=0)throw new ArgumentOutOfRangeException("seconds");
+            GenerateReference(path,seconds,true);
+        }
+        static void GenerateReference(string path,int seconds,bool indexed) {
             var format=new byte[16];Buffer.BlockCopy(BitConverter.GetBytes((ushort)1),0,format,0,2);Buffer.BlockCopy(BitConverter.GetBytes((ushort)2),0,format,2,2);
             Buffer.BlockCopy(BitConverter.GetBytes(48000),0,format,4,4);Buffer.BlockCopy(BitConverter.GetBytes(192000),0,format,8,4);Buffer.BlockCopy(BitConverter.GetBytes((ushort)4),0,format,12,2);Buffer.BlockCopy(BitConverter.GetBytes((ushort)16),0,format,14,2);
             using(var sink=new WaveSink(path,WaveFormat.Parse(format))) {
-                var data=new byte[48000*10*4];
-                for(int i=0;i<480000;i++) {
-                    double t=i/48000.0;double a=0,b=0;double local=0,length=0;
+                var data=new byte[48000*seconds*4];
+                for(int i=0;i<48000*seconds;i++) {
+                    double t=(i%480000)/48000.0;double a=0,b=0;double local=0,length=0;
                     if(t>=1&&t<3) {local=t-1;length=2;a=b=Math.Sin(2*Math.PI*440*local);}
                     else if(t>=3&&t<5) {local=t-3;length=2;a=Math.Sin(2*Math.PI*1000*local);b=Math.Sin(2*Math.PI*660*local);}
                     else if(t>=5&&t<8) {local=t-5;length=3;a=b=(Math.Sin(2*Math.PI*220*local)+Math.Sin(2*Math.PI*440*local)+Math.Sin(2*Math.PI*880*local))/3;}
                     else if(t>=8&&t<9) {local=t-8;length=1;a=b=Math.Sin(2*Math.PI*(200*local+1900*local*local));}
                     double envelope=length==0?0:Math.Min(1,Math.Min(local/0.01,(length-local)/0.01));
+                    if(indexed&&t<1) {
+                        int bit=(int)((t-0.08)/0.12);double pulse=t-0.08-bit*0.12;
+                        if(t>=0.08&&bit>=0&&bit<6&&pulse>=0&&pulse<0.06) {
+                            int index=i/480000+1;double hz=(index&(1<<bit))!=0?1400:700;
+                            a=b=Math.Sin(2*Math.PI*hz*pulse);envelope=Math.Min(1,Math.Min(pulse/0.005,(0.06-pulse)/0.005));
+                        }else{a=b=0;envelope=0;}
+                    }
                     short left=(short)(a*envelope*0.08*32767),right=(short)(b*envelope*0.08*32767);
                     data[i*4]=(byte)left;data[i*4+1]=(byte)(left>>8);data[i*4+2]=(byte)right;data[i*4+3]=(byte)(right>>8);
                 }

@@ -5,10 +5,13 @@
 . (Join-Path $PSScriptRoot 'Reproduction.ps1')
 . (Join-Path $PSScriptRoot 'Bundles.ps1')
 . (Join-Path $PSScriptRoot 'TraceProcess.ps1')
+. (Join-Path $PSScriptRoot 'UsbTrace.ps1')
 . (Join-Path $PSScriptRoot 'Trace.ps1')
 . (Join-Path $PSScriptRoot 'TraceUiState.ps1')
 . (Join-Path $PSScriptRoot 'PlaybackReview.ps1')
 . (Join-Path $PSScriptRoot 'PhoneNetwork.ps1')
+. (Join-Path $PSScriptRoot 'BrowserUploadLog.ps1')
+. (Join-Path $PSScriptRoot 'FollowUp.ps1')
 
 function Invoke-CollectionSection {
     param([scriptblock]$Read)

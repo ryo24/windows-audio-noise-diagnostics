@@ -1,4 +1,4 @@
-﻿param([string]$SessionPath,[string]$TraceId,[switch]$FailSave,[switch]$ExitWithoutFinalState,[switch]$WaitForRelease)
+﻿param([string]$SessionPath,[string]$TraceId,[switch]$FailSave,[switch]$ExitWithoutFinalState,[switch]$WaitForRelease,[switch]$IncludeUsb)
 $ErrorActionPreference='Stop'
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/Core.ps1')
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/Inventory.ps1')
@@ -9,7 +9,10 @@ if($WaitForRelease){
 }
 # Runs the real recorder state machine in a separate process, replacing WPR
 # only. This never requests elevation or records any actual system activity.
-$state=Invoke-DetailedTrace -SessionPath $SessionPath -TraceId $TraceId -Seconds 30 -WprRunner {
+function Get-UsbTraceProviders { @([pscustomobject]@{name='Microsoft-Windows-USB-USBXHCI';id=[guid]::Empty.ToString();keywords='0x8043';level=5}) }
+$usbPath=Join-Path (Join-Path (Join-Path (Split-Path -Parent $SessionPath) 'traces') $TraceId) 'usb.etl'
+$usbRunner={param($a);if($a[0] -eq 'stop'){[IO.File]::WriteAllText($usbPath,'Synthetic USB trace fixture')};return 0}
+$state=Invoke-DetailedTrace -SessionPath $SessionPath -TraceId $TraceId -Seconds 30 -IncludeUsb:$IncludeUsb -UsbRunner $usbRunner -WprRunner {
     param($arguments)
     if($arguments[0] -eq '-start'){Start-Sleep -Milliseconds 800}
     if($arguments[0] -eq '-marker' -and $ExitWithoutFinalState){[Environment]::Exit(9)}

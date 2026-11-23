@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "kind": "BrowserUploadDiagnostics",
+  "browser": {"family": "Chrome", "major": 123},
+  "secureContext": false,
+  "transportProtocol": "HTTP",
+  "online": true,
+  "attempts": [{
+    "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "kind": "Upload",
+    "startedUtc": "2026-01-01T00:00:00.000Z",
+    "outcome": "NetworkError",
+    "fileBytes": 1024,
+    "mediaKind": "Audio",
+    "events": [
+      {"stage": "Selected", "elapsedMs": 0, "loadedBytes": 0, "status": 0},
+      {"stage": "FileReadable", "elapsedMs": 2, "loadedBytes": 0, "status": 0},
+      {"stage": "RequestStarted", "elapsedMs": 3, "loadedBytes": 0, "status": 0},
+      {"stage": "NetworkError", "elapsedMs": 40, "loadedBytes": 0, "status": 0}
+    ]
+  }]
+}

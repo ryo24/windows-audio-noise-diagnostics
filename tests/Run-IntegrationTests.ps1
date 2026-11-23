@@ -12,6 +12,22 @@ $temporary=Join-Path (Join-Path $root 'test-output') ('integration-'+[guid]::New
 [IO.Directory]::CreateDirectory($temporary)|Out-Null
 $receiver=$null;$connections=New-Object 'System.Collections.Generic.List[object]'
 try {
+    Add-Type -TypeDefinition @'
+public static class AtomicReaderFixture {
+    public static System.Threading.Thread Hold(string path, int milliseconds) {
+        var stream=System.IO.File.Open(path,System.IO.FileMode.Open,System.IO.FileAccess.Read,System.IO.FileShare.Read);
+        var thread=new System.Threading.Thread(delegate(){System.Threading.Thread.Sleep(milliseconds);stream.Dispose();});
+        thread.Start();return thread;
+    }
+}
+'@
+    $atomicPath=Join-Path $temporary 'atomic.json';Write-AtomicText $atomicPath '{"saved":1}'
+    $reader=[AtomicReaderFixture]::Hold($atomicPath,200)
+    Write-AtomicText $atomicPath '{"saved":2}';$reader.Join()
+    Assert-Integration ((Get-Content $atomicPath -Raw|ConvertFrom-Json).saved -eq 2) 'Atomic saves wait for a concurrent trace reader and retain valid JSON'
+    $reader=[IO.File]::OpenRead($atomicPath);$blocked=$false
+    try {Write-AtomicText $atomicPath '{"saved":3}'}catch{$blocked=$true}finally{$reader.Dispose()}
+    Assert-Integration ($blocked -and (Get-Content $atomicPath -Raw|ConvertFrom-Json).saved -eq 2 -and @(Get-ChildItem $temporary -Filter '*.tmp').Count -eq 0) 'A persistent read lock fails within a bound without changing the saved original or leaving temporary files'
     $session=New-DiagnosticSession ([pscustomobject]@{speakerModel='fixture';cStates='Unknown'})
     $directory=Join-Path $temporary 'session';Save-Session $session $directory
     $run=New-TraceRun $directory $session.id;Send-TraceStopRequest $run
@@ -53,6 +69,8 @@ try {
     $client=New-TestConnection $receiver;try{Send-TestHeader $client $receiver ($prefix+'health');$line=Read-StatusLine $client}finally{$client.Close()}
     Assert-Integration ($line -like '*200*') 'A speculative idle browser connection does not block another device HTTP request'
     $idle.Close()
+    Wait-Integration {@($receiver.NetworkSnapshot().Events|Where-Object {$_.Kind -eq 'ConnectionClosed' -and $_.Reason -eq 'BeforeHttpRequest'}).Count -gt 0}
+    Assert-Integration (@($receiver.NetworkSnapshot().Events|Where-Object {$_.Kind -eq 'ConnectionClosed' -and $_.Reason -eq 'BeforeHttpRequest' -and $_.HeaderBytes -eq 0 -and $_.ConnectionId}).Count -gt 0) 'An idle connection closing before HTTP is recorded explicitly with a per-connection ID'
     $tls=New-TestConnection $receiver;try{$tls.GetStream().WriteByte(0x16);[void]$tls.GetStream().ReadByte()}finally{$tls.Close()}
     Wait-Integration {$receiver.NetworkSnapshot().TlsConnections -eq 1}
     Assert-Integration ($receiver.NetworkSnapshot().TlsConnections -eq 1) 'HTTPS-like attempts on the HTTP port are observable without a fabricated HTTP status'
@@ -65,13 +83,30 @@ try {
     Assert-Integration ($line -like '*429*' -and $receiver.NetworkSnapshot().ReservedUploadBytes -eq 536870912) 'Concurrent uploads reserve the aggregate limit before reading any body'
     foreach($c in $connections){$c.Close()};Wait-Integration {$receiver.NetworkSnapshot().ActiveUploads -eq 0}
     Assert-Integration ($receiver.NetworkSnapshot().ReservedUploadBytes -eq 0) 'Interrupted uploads release reservations for subsequent requests'
+    $wave=[Text.Encoding]::ASCII.GetBytes('RIFF0000WAVEfixture');$uploadClient=New-Object Net.WebClient
+    try{$uploadClient.Headers['X-Upload-Attempt']='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';[void]$uploadClient.UploadData($receiver.Url+'upload','POST',$wave)}finally{$uploadClient.Dispose()}
+    $savedEvent=@($receiver.NetworkSnapshot().Events|Where-Object {$_.Kind -eq 'UploadSaved'})
+    Assert-Integration ($savedEvent.Count -eq 1 -and $savedEvent[0].Method -eq 'POST' -and $savedEvent[0].AttemptId -eq 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' -and $savedEvent[0].BodyBytes -eq $wave.Length -and $savedEvent[0].ExpectedBytes -eq $wave.Length) 'Saved uploads retain method, actual received bytes and the validated browser attempt ID'
     $report=Get-PhoneConnectionDiagnostics $receiver '127.0.0.1'
     Assert-Integration ($report.localHttpSelfTest.httpStatus -eq 200 -and $report.receiverAfterSelfTest.OtherDeviceConnections -eq 0) 'PC self-test works but is never counted as a different device or phone reachability'
     $report.manualObservation=[pscustomobject]@{errorText=Protect-PhoneDiagnosticNote ('error '+$receiver.Url+' and /s/abcdefghijklmnopqrstuvwxyz/');otherBrowser='Unknown'}
+    $browserLog=Read-BrowserUploadLog (Join-Path $PSScriptRoot 'fixtures/browser-upload-log.json')
+    Assert-Integration ($browserLog.attempts[0].outcome -eq 'NetworkError' -and $browserLog.attempts[0].events.Count -eq 4) 'Browser upload diagnostics preserve stages and do not infer the network failure cause'
+    $report|Add-Member -NotePropertyName browserUploadDiagnostics -NotePropertyValue $browserLog
+    $malicious=Get-Content (Join-Path $PSScriptRoot 'fixtures/browser-upload-log.json') -Raw|ConvertFrom-Json
+    $malicious|Add-Member -NotePropertyName url -NotePropertyValue $receiver.Url
+    $badLog=Join-Path $temporary 'untrusted-browser.json';Write-AtomicText $badLog ($malicious|ConvertTo-Json -Depth 10)
+    $blocked=$false;try{Read-BrowserUploadLog $badLog|Out-Null}catch{$blocked=$true}
+    Assert-Integration $blocked 'Browser imports reject unexpected raw URL fields instead of copying arbitrary JSON into a diagnostic session'
+    $malicious.PSObject.Properties.Remove('url');$malicious.attempts[0].events[0].loadedBytes=-1
+    Write-AtomicText $badLog ($malicious|ConvertTo-Json -Depth 10)
+    $blocked=$false;try{Read-BrowserUploadLog $badLog|Out-Null}catch{$blocked=$true}
+    Assert-Integration $blocked 'Browser imports reject invalid byte counts'
     $session|Add-Member -NotePropertyName networkDiagnostics -NotePropertyValue @($report)
     Save-Session $session $directory
     $json=Get-Content (Join-Path $directory 'network-diagnostics.json') -Raw -Encoding UTF8
     Assert-Integration ($json -notmatch [regex]::Escape(([Uri]$receiver.Url).AbsolutePath) -and $json -notmatch 'abcdefghijklmnopqrstuvwxyz') 'Manually pasted connection observations redact pairing URLs and tokens'
+    Assert-Integration ((Get-Content (Join-Path $directory 'session.json') -Raw -Encoding UTF8|ConvertFrom-Json).networkDiagnostics[0].browserUploadDiagnostics.attempts[0].outcome -eq 'NetworkError') 'Imported browser upload diagnostics survive normal session serialization and export'
     $bundle=Export-DiagnosticBundle $directory (Join-Path $temporary 'exports')
     Assert-Integration ((Test-DiagnosticBundle $bundle).manifest.files.path -contains 'session/network-diagnostics.json') 'Connection diagnoses and manual browser observations are included in the export ZIP'
     $pending=New-TraceRun $directory $session.id;$blocked=$false

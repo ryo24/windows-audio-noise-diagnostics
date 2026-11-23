@@ -1,5 +1,5 @@
 ﻿function Invoke-DetailedTrace {
-    param([string]$SessionPath,[ValidateRange(1,120)][int]$Seconds=60,[scriptblock]$WprRunner,[string]$TraceId='')
+    param([string]$SessionPath,[ValidateRange(1,120)][int]$Seconds=60,[scriptblock]$WprRunner,[string]$TraceId='',[switch]$IncludeUsb,[scriptblock]$UsbRunner)
     # Invoked explicitly by the user, in an elevated helper. Never cancels another WPR instance.
     $session=Read-Session $SessionPath
     if($session.id -notmatch '^[a-fA-F0-9]{32}$'){throw 'Invalid session ID'}
@@ -15,6 +15,8 @@
         if($existing.status -ne 'Launching' -or $existing.id -ne $traceId -or $existing.sessionId -ne $session.id){throw 'Existing trace data will not be overwritten'}
     }
     $state=[pscustomobject]@{id=$traceId;instanceName=$instance;sessionId=$session.id;status='Starting';helperPid=$PID;command=$null;commandStarted=$null;profiles=@('GeneralProfile','Audio');mode='Memory';requestedSeconds=$Seconds;started=Get-ClockPoint;updated=$null;stopping=$null;ended=$null;stopReason=$null;sha256=$null;bytes=0;startExitCode=$null;stopExitCode=$null;markers=@();errorType=$null;scope='ETL can contain process names, file paths and system-wide activity. Memory tracing is bounded and older events can be lost. Audio and DPC/ISR coverage depends on Windows; USB transfer-level tracing is not guaranteed.'}
+    $state|Add-Member -NotePropertyName link -NotePropertyValue $(if($existing){$existing.link}else{$null})
+    $state|Add-Member -NotePropertyName usb -NotePropertyValue ([pscustomobject]@{requested=[bool]$IncludeUsb;instanceName=('AudioNoise-USB-'+$TraceId);status='NotRequested';providers=@();started=$null;ended=$null;startExitCode=$null;stopExitCode=$null;bytes=0;sha256=$null;errorType=$null;clock='QPC';maxMegabytes=256;mode='Circular';scope='xHCI/UCX/USBHUB3 stack, including USB 2 devices on xHCI. All devices on these stacks; not filtered to one endpoint. Transfer headers, errors and rundown; no PartialDataBusTrace or FullDataBusTrace requested. Descriptors and identifiers can be present. Circular events may be overwritten; missing events never prove normality.'})
     $stateFile=Join-Path $traceDirectory 'trace.json'
     function Save-TraceState {$state.updated=Get-ClockPoint;Write-AtomicText $stateFile ($state|ConvertTo-Json -Depth 10)}
     function Invoke-TraceCommand {
@@ -32,6 +34,7 @@
             $identity=[Security.Principal.WindowsIdentity]::GetCurrent();$principal=New-Object Security.Principal.WindowsPrincipal($identity)
             if(-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Administrator privileges are required for WPR.'}
         }
+        if($IncludeUsb){$state.usb.status='Starting';Save-TraceState;Start-UsbTrace $state.usb $traceDirectory $UsbRunner {Save-TraceState};Save-TraceState}
         $state.startExitCode=Invoke-TraceCommand @('-start','GeneralProfile','-start','Audio')
         if($state.startExitCode -ne 0){throw 'WPR start failed. No other trace was cancelled.'}
         $started=$true;$state.status='Recording';$state.started=Get-ClockPoint;Save-TraceState
@@ -66,6 +69,12 @@
                 }else{$state.status='StopFailed';$state.errorType='TraceSaveFailed'}
             }catch{$state.status='StopFailed';$state.errorType=$_.Exception.GetType().Name}
         }
+        if($IncludeUsb -and $state.usb.status -eq 'Recording'){
+            $state.status='Stopping';if(-not $state.stopping){$state.stopping=Get-ClockPoint};Save-TraceState
+            Stop-UsbTrace $state.usb $traceDirectory $UsbRunner {Save-TraceState}
+            if($state.usb.status -ne 'Completed'){$state.status='StopFailed';$state.errorType='UsbTraceSaveFailed'}elseif(-not $started){$state.status='Failed'}else{$state.status=if($state.errorType){'Failed'}else{'Completed'}}
+        }
+        if($IncludeUsb -and $state.usb.status -in @('Starting','Failed')){$state.usb.status='Failed';$state.usb.errorType=$state.errorType}
         $state.ended=Get-ClockPoint;Save-TraceState
     }
     return $state

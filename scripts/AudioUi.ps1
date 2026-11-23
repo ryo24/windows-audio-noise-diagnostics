@@ -68,6 +68,8 @@ function Start-ObservationCapture {
     $mode=if($audioMode.SelectedIndex -eq 0){'Reference'}else{'ExternalApp'}
     $name=if($audioOutput.SelectedItem){$audioOutput.SelectedItem.Name}else{'出力未選択'}
     $probe=New-AudioProbeRecord $mode $name $TestId ([int]$audioLength.SelectedItem)
+    $probe|Add-Member -NotePropertyName selectedOutputFormat -NotePropertyValue (Invoke-CollectionSection {[AudioNoiseDiagnostics.Endpoint]::Read($audioOutput.SelectedItem.Id)|Select-Object SampleRate,Channels,ContainerBits,FormatNote})
+    if($script:activeTest.followUp){$script:activeTest.followUp.probeId=$probe.id}
     $probe|Add-Member -NotePropertyName playbackSnapshot -NotePropertyValue (Invoke-CollectionSection {Get-PlaybackSnapshot $script:session.id $audioOutput.SelectedItem.Id})
     if($audioSource.SelectedIndex -eq 1){$probe.sourceKind='Microphone';$probe.inputEndpointName=$audioInput.SelectedItem.Name;$probe.files.recording='audio/'+$probe.id+'/microphone.wav';$probe.scope='マイク入力。周囲音・距離・マイクの処理も含みます。'}
     if(-not $script:session.PSObject.Properties['audioProbes']){$script:session|Add-Member -NotePropertyName audioProbes -NotePropertyValue @()}
@@ -77,7 +79,15 @@ function Start-ObservationCapture {
         $path=Resolve-AudioFile $script:sessionDirectory $probe.files.recording
         [IO.Directory]::CreateDirectory((Split-Path -Parent $path))|Out-Null
         $referencePath=$null
-        if($mode -eq 'Reference'){$referencePath=Resolve-AudioFile $script:sessionDirectory $probe.files.reference;[AudioNoiseDiagnostics.AudioFiles]::GenerateReference($referencePath)}
+        if($mode -eq 'Reference'){
+            $referencePath=Resolve-AudioFile $script:sessionDirectory $probe.files.reference
+            if($script:activeTest.followUp -and $script:activeTest.followUp.kind -ne 'None'){
+                $seconds=[int]([Math]::Ceiling($probe.maximumSeconds/10.0)*10)
+                [AudioNoiseDiagnostics.AudioFiles]::GenerateFollowUpReference($referencePath,$seconds)
+                $probe.referenceId='audio-noise-reference-v2-indexed-'+$seconds+'s-48000hz-stereo-pcm16'
+                $probe|Add-Member -NotePropertyName referencePattern -NotePropertyValue ([pscustomobject]@{blockSeconds=10;markerBits=6;leastSignificantBitFirst=$true;firstMarkerSeconds=0.08;bitPeriodSeconds=0.12;toneSeconds=0.06;zeroHz=700;oneHz=1400;blockIndexStartsAt=1;scope='各10秒区間の先頭1秒内に番号を符号化。共通音で位置を合わせるための識別子で、スマホ時計の同期ではない。'})
+            }else{[AudioNoiseDiagnostics.AudioFiles]::GenerateReference($referencePath)}
+        }
         if($probe.sourceKind -eq 'Microphone'){$script:audioRecorder=[AudioNoiseDiagnostics.AudioProbe]::StartMicrophone($audioInput.SelectedItem.Id,$audioOutput.SelectedItem.Id,$path,$referencePath,$probe.maximumSeconds)}
         else{$script:audioRecorder=[AudioNoiseDiagnostics.AudioProbe]::Start($audioOutput.SelectedItem.Id,$path,$referencePath,$probe.maximumSeconds)}
     }catch{$probe.status='Failed';Save-CurrentSession;Refresh-AudioRecords;throw}

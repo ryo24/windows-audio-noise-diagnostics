@@ -1,11 +1,11 @@
-﻿function Invoke-WprProcess {
-    param([string[]]$Arguments,[string]$Instance,[scriptblock]$Heartbeat,[string]$Executable=(Join-Path $env:SystemRoot 'System32\wpr.exe'))
+﻿function Invoke-DiagnosticProcess {
+    param([string[]]$Arguments,[scriptblock]$Heartbeat,[string]$Executable=(Join-Path $env:SystemRoot 'System32\wpr.exe'))
     $process=New-Object Diagnostics.Process
     try {
         $process.StartInfo.FileName=$Executable
         $process.StartInfo.UseShellExecute=$false;$process.StartInfo.CreateNoWindow=$true
         $process.StartInfo.RedirectStandardOutput=$true;$process.StartInfo.RedirectStandardError=$true
-        $allArguments=@($Arguments)+@('-instancename',$Instance)
+        $allArguments=@($Arguments)
         if(@($allArguments|Where-Object {$_ -match '"|[\r\n]'}).Count){throw 'Unsupported WPR argument'}
         $process.StartInfo.Arguments=($allArguments|ForEach-Object {'"'+$_+'"'}) -join ' '
         [void]$process.Start()
@@ -16,4 +16,9 @@
         [void]$output.GetAwaiter().GetResult();[void]$errors.GetAwaiter().GetResult()
         return $process.ExitCode
     } finally {$process.Dispose()}
+}
+
+function Invoke-WprProcess {
+    param([string[]]$Arguments,[string]$Instance,[scriptblock]$Heartbeat,[string]$Executable=(Join-Path $env:SystemRoot 'System32\wpr.exe'))
+    Invoke-DiagnosticProcess -Arguments (@($Arguments)+@('-instancename',$Instance)) -Executable $Executable -Heartbeat $Heartbeat
 }

@@ -26,8 +26,18 @@ function Write-AtomicText {
     $temporary = Join-Path $directory ([IO.Path]::GetRandomFileName() + '.tmp')
     try {
         [IO.File]::WriteAllText($temporary, $Text, (New-Object Text.UTF8Encoding([bool]$Bom)))
-        if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temporary, $Path, [System.Management.Automation.Language.NullString]::Value) }
-        else { [IO.File]::Move($temporary, $Path) }
+        # The trace helper can briefly read session.json without delete sharing.
+        # Retry the atomic replacement, never remove/truncate the saved original.
+        for($attempt=0;;$attempt++){
+            try {
+                if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temporary, $Path, [System.Management.Automation.Language.NullString]::Value) }
+                else { [IO.File]::Move($temporary, $Path) }
+                break
+            } catch [IO.IOException] {
+                if($attempt -ge 19){throw}
+                Start-Sleep -Milliseconds 25
+            }
+        }
     } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
 }
 
@@ -240,7 +250,7 @@ function Get-ReportHtml {
     $audioHtml=Get-AudioReportHtml $Session
     $physicalHtml=Get-PhysicalReportHtml $Session
     $networkHtml=Get-PhoneNetworkReportHtml $Session
-    $reproductionHtml=Get-ReproductionReportHtml $Session
+    $reproductionHtml=(Get-ReproductionReportHtml $Session)+(Get-FollowUpReportHtml $Session)
     $driverEvidenceHtml=(@($Session.tests | Where-Object { $null -ne $_.driverSnapshot } | ForEach-Object {
         '<details><summary>ドライバー変更テストの再取得情報: ' + (ConvertTo-HtmlText $_.id) + '</summary><pre>' + (ConvertTo-HtmlText ($_.driverSnapshot | ConvertTo-Json -Depth 14)) + '</pre></details>'
     })) -join "`n"

@@ -7,12 +7,14 @@ function Test-DetailedTraceBusy {
 function Reset-EvidenceUiForSession {
     $script:lastPhoneReceiver=$null;$script:lastPhoneNetworkDigest=$null
     $script:traceRun=$null;$script:tracePresentation=$null
+    if($followUpChoice){$followUpChoice.SelectedIndex=0;$followUpConsent.Checked=$false;$followUpOperation.SelectedIndex=0;$followUpState.SelectedIndex=0;$script:followUpExternalChoices=@()}
     $traceStatus.Text='Audio＋GeneralProfileのETLを保存します。USB転送の詳細や自動原因判定は保証しません。'
     $phoneStatus.Text='スマホからの受信を開いてQRを表示するか、保存済みファイルを取り込めます。'
 }
 function Start-TraceHelper {
     param($Run)
     $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+(Join-Path $PSScriptRoot 'Trace-Control.ps1')+'" -SessionPath "'+(Join-Path $script:sessionDirectory 'session.json')+'" -TraceId '+$Run.id
+    if($Run.state.includeUsb){$arguments+=' -IncludeUsb'}
     Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -Verb RunAs -WindowStyle Hidden -ArgumentList $arguments -PassThru
 }
 function Update-TraceUi {
@@ -87,24 +89,28 @@ function New-TraceTab {
     $script:traceStatus=New-UiLabel 'Audio＋GeneralProfileのETLを保存します。USB転送の詳細や自動原因判定は保証しません。';$traceStatus.Dock='Fill';$traceStatus.AutoSize=$false;$script:traceProgress=New-Object Windows.Forms.ProgressBar;$traceProgress.Dock='Fill';$traceProgress.Maximum=60;$traceProgress.Visible=$false;$grid.Controls.Add($traceProgress,0,3);$grid.SetColumnSpan($traceProgress,2)
     $grid.Controls.Add($traceStatus,0,0);$grid.SetColumnSpan($traceStatus,2);$tab.Controls.Add($grid)
     $traceConsent.Add_CheckedChanged({Update-UiState})
-    $traceStart.Add_Click({try {
+    $traceStart.Add_Click({Start-LinkedTrace})
+    $traceStop.Add_Click({try{Request-TraceStop}catch{Show-UiError $_.Exception.Message}})
+    $traceOpen.Add_Click({if($script:traceRun){Start-Process explorer.exe -ArgumentList ('"'+$script:traceRun.directory+'"')}})
+    $soundSettings.Add_Click({Start-Process 'ms-settings:sound'})
+    return $tab
+}
+
+function Start-LinkedTrace {
+    param([switch]$IncludeUsb,$Link=$null)
+    try{
+        if(Test-DetailedTraceBusy){throw '前の詳細トレースの保存を待ってください。'}
         Save-CurrentSession
-        $script:traceRun=New-TraceRun $script:sessionDirectory $script:session.id
+        $script:traceRun=New-TraceRun $script:sessionDirectory $script:session.id -IncludeUsb:$IncludeUsb -Link $Link
         $script:tracePresentation=Get-TracePresentation $script:traceRun $script:traceRun.state
-        Update-UiState
-        [Windows.Forms.Application]::DoEvents()
+        Update-UiState;[Windows.Forms.Application]::DoEvents()
         if($script:traceRun.stopRequested){$script:traceRun.state.status='Cancelled';Write-AtomicText (Join-Path $script:traceRun.directory 'trace.json') ($script:traceRun.state|ConvertTo-Json -Depth 8);Poll-DetailedTrace;return}
         $script:traceProcess=Start-TraceHelper $script:traceRun
         Poll-DetailedTrace
     }catch{
         if($script:traceRun){
             $state=$script:traceRun.state;$state.status='LaunchFailed';$state.errorType=if($_.Exception.NativeErrorCode -eq 1223){'AdminApprovalCancelled'}else{$_.Exception.GetType().Name}
-            Write-AtomicText (Join-Path $script:traceRun.directory 'trace.json') ($state|ConvertTo-Json -Depth 8)
-            Poll-DetailedTrace
+            Write-AtomicText (Join-Path $script:traceRun.directory 'trace.json') ($state|ConvertTo-Json -Depth 8);Poll-DetailedTrace
         }else{Show-UiError $_.Exception.Message}
-    }})
-    $traceStop.Add_Click({try{Request-TraceStop}catch{Show-UiError $_.Exception.Message}})
-    $traceOpen.Add_Click({if($script:traceRun){Start-Process explorer.exe -ArgumentList ('"'+$script:traceRun.directory+'"')}})
-    $soundSettings.Add_Click({Start-Process 'ms-settings:sound'})
-    return $tab
+    }
 }

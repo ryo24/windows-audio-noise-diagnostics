@@ -28,7 +28,7 @@ namespace AudioNoiseDiagnostics {
         public readonly ConcurrentQueue<ReceivedMedia> Received=new ConcurrentQueue<ReceivedMedia>();
         public readonly string Url,Address; public volatile bool Finished; public volatile int AcceptedCount; public long TotalBytes;
         public string LastError; public int Port {get;private set;}
-        sealed class Context {public string Peer,Route="Unparsed",Browser="Unknown";public int BrowserMajor;}
+        sealed class Context {public string Peer,Route="Unparsed",Browser="Unknown",ConnectionId=Guid.NewGuid().ToString("N"),Method="Unknown",AttemptId;public int BrowserMajor;public long HeaderBytes,BodyBytes,ExpectedBytes;}
         public static bool IsLocalAddress(string address) {
             IPAddress ip;if(!IPAddress.TryParse(address,out ip)||ip.AddressFamily!=AddressFamily.InterNetwork)return false;
             var b=ip.GetAddressBytes();return b[0]==127||b[0]==10||(b[0]==192&&b[1]==168)||(b[0]==172&&b[1]>=16&&b[1]<=31);
@@ -46,7 +46,7 @@ namespace AudioNoiseDiagnostics {
             thread=new Thread(Run);thread.IsBackground=true;thread.Start();
         }
         void Record(Context context,string kind,int status,string reason) {
-            networkEvents.Enqueue(new ReceiverNetworkEvent{Utc=DateTime.UtcNow.ToString("o"),Kind=kind,Peer=context==null?"Receiver":context.Peer,Route=context==null?"None":context.Route,HttpStatus=status,Reason=reason,Browser=context==null?"Unknown":context.Browser,BrowserMajor=context==null?0:context.BrowserMajor});
+            networkEvents.Enqueue(new ReceiverNetworkEvent{Utc=DateTime.UtcNow.ToString("o"),Kind=kind,Peer=context==null?"Receiver":context.Peer,Route=context==null?"None":context.Route,HttpStatus=status,Reason=reason,Browser=context==null?"Unknown":context.Browser,BrowserMajor=context==null?0:context.BrowserMajor,ConnectionId=context==null?null:context.ConnectionId,Method=context==null?"Unknown":context.Method,AttemptId=context==null?null:context.AttemptId,HeaderBytes=context==null?0:context.HeaderBytes,BodyBytes=context==null?0:context.BodyBytes,ExpectedBytes=context==null?0:context.ExpectedBytes});
             ReceiverNetworkEvent ignored;while(networkEvents.Count>200)networkEvents.TryDequeue(out ignored);
         }
         public ReceiverNetworkSnapshot NetworkSnapshot() {
@@ -82,25 +82,28 @@ namespace AudioNoiseDiagnostics {
         void Handle(NetworkStream stream,Context context) {
             var header=new List<byte>();var clock=Stopwatch.StartNew();
             while(header.Count<16384&&clock.Elapsed.TotalSeconds<20){
-                int b=stream.ReadByte();if(b<0)return;
+                int b=stream.ReadByte();if(b<0){Record(context,"ConnectionClosed",0,header.Count==0?"BeforeHttpRequest":"IncompleteHeaders");return;}
+                context.HeaderBytes++;
                 if(header.Count==0&&b==0x16){Interlocked.Increment(ref tlsConnections);Record(context,"TlsOnHttpPort",0,"HttpsRequestedOnHttpListener");return;}
                 header.Add((byte)b);int n=header.Count;if(n>=4&&header[n-4]==13&&header[n-3]==10&&header[n-2]==13&&header[n-1]==10)break;
             }
             if(header.Count>=16384||clock.Elapsed.TotalSeconds>=20){Error(stream,context,400,"HeaderLimit");return;}
             var lines=Encoding.ASCII.GetString(header.ToArray()).Split(new[]{"\r\n"},StringSplitOptions.None);
             var first=lines[0].Split(' ');if(first.Length!=3){Error(stream,context,400,"InvalidRequest");return;}
+            context.Method=first[0]=="GET"||first[0]=="POST"||first[0]=="OPTIONS"?first[0]:"Other";
             var headers=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
             foreach(string line in lines){int split=line.IndexOf(':');if(split>0){string key=line.Substring(0,split).Trim();if(headers.ContainsKey(key)){Error(stream,context,400,"DuplicateHeader");return;}headers[key]=line.Substring(split+1).Trim();}}
             string agent;if(headers.TryGetValue("User-Agent",out agent)){var match=Regex.Match(agent,@"(Firefox|Chrome|Safari)/(\d+)");if(match.Success){context.Browser=match.Groups[1].Value;Int32.TryParse(match.Groups[2].Value,out context.BrowserMajor);}}
+            string attempt;if(headers.TryGetValue("X-Upload-Attempt",out attempt)&&Regex.IsMatch(attempt,@"\A[a-f0-9]{32}\z"))context.AttemptId=attempt;
             string host;if(!headers.TryGetValue("Host",out host)||!String.Equals(host,new Uri(origin).Authority,StringComparison.OrdinalIgnoreCase)){Error(stream,context,400,"InvalidHost");return;}
             string route=first[1];if(!route.StartsWith(prefix,StringComparison.Ordinal)){context.Route="Unknown";Error(stream,context,404,"NotFound");return;}route=route.Substring(prefix.Length);
-            context.Route=route==""?"PhonePage":route=="pc"?"QrPage":route=="health"?"Health":route=="upload"?"Upload":route=="web.css"?"Style":route=="phone.js"||route=="pc.js"||route=="qrcode.min.js"?"Script":"Unknown";
+            context.Route=route==""?"PhonePage":route=="pc"?"QrPage":route=="health"?"Health":route=="upload"?"Upload":route=="web.css"?"Style":route=="phone.js"||route=="transfer.js"||route=="pc.js"||route=="qrcode.min.js"?"Script":"Unknown";
             Record(context,"HttpRequest",0,null);
             if(first[0]=="GET"){
                 if(route=="health"){Reply(stream,context,200,"application/json; charset=utf-8",Encoding.UTF8.GetBytes("{\"ready\":true}"));return;}
                 string file=null,type="text/html; charset=utf-8";
                 if(route=="")file="phone.html";else if(route=="pc")file="pc.html";
-                else if(route=="phone.js"||route=="pc.js"){file=route;type="application/javascript; charset=utf-8";}
+                else if(route=="phone.js"||route=="transfer.js"||route=="pc.js"){file=route;type="application/javascript; charset=utf-8";}
                 else if(route=="web.css"){file=route;type="text/css; charset=utf-8";}
                 else if(route=="qrcode.min.js"){file="vendor/qrcodejs/qrcode.min.js";type="application/javascript; charset=utf-8";}
                 if(file==null){Error(stream,context,404,"NotFound");return;}
@@ -111,15 +114,17 @@ namespace AudioNoiseDiagnostics {
             if(headers.ContainsKey("Transfer-Encoding")){Error(stream,context,400,"LengthRequired");return;}
             long length;if(!headers.TryGetValue("Content-Length",out value)||!Int64.TryParse(value,out length)||length<=0){Error(stream,context,400,"LengthRequired");return;}
             if(length>MaxFileBytes){Error(stream,context,413,"FileTooLarge");return;}
+            context.ExpectedBytes=length;
             bool reserved=false;
             lock(gate){if(AcceptedCount+inFlightUploads<12&&TotalBytes+reservedBytes+length<=536870912){inFlightUploads++;reservedBytes+=length;reserved=true;}}
             if(!reserved){Error(stream,context,429,"ReceiverLimit");return;}
+            Record(context,"UploadStarted",0,null);
             string staging=Path.Combine(directory,"physical","incoming-"+Guid.NewGuid().ToString("N")+".upload");
             try {
                 Directory.CreateDirectory(Path.GetDirectoryName(staging));
                 using(var output=new FileStream(staging,FileMode.CreateNew,FileAccess.Write,FileShare.None)){
                     var buffer=new byte[65536];long remaining=length;
-                    while(remaining>0){if(stop||clock.Elapsed.TotalSeconds>180)throw new IOException("Transfer cancelled.");int read=stream.Read(buffer,0,(int)Math.Min(buffer.Length,remaining));if(read==0)throw new EndOfStreamException();output.Write(buffer,0,read);remaining-=read;}
+                    while(remaining>0){if(stop||clock.Elapsed.TotalSeconds>180)throw new IOException("Transfer cancelled.");int read=stream.Read(buffer,0,(int)Math.Min(buffer.Length,remaining));if(read==0)throw new EndOfStreamException();output.Write(buffer,0,read);remaining-=read;context.BodyBytes+=read;}
                 }
                 ReceivedMedia media;
                 try{media=ImportFile(staging,directory,"PhoneBrowser");}catch(InvalidDataException){Error(stream,context,415,"UnsupportedMedia");return;}
@@ -127,7 +132,7 @@ namespace AudioNoiseDiagnostics {
                 string note=Header(headers,"X-Note",4096);try{media.Note=Uri.UnescapeDataString(note);}catch{media.Note="";}if(media.Note.Length>1000)media.Note=media.Note.Substring(0,1000);
                 media.PreviewConfirmed=Header(headers,"X-Preview-Confirmed",8)=="true";value=Header(headers,"X-Heard-Noise",16);media.HeardNoise=value=="Yes"||value=="No"?value:"Unknown";
                 lock(gate){AcceptedCount++;TotalBytes+=length;inFlightUploads--;reservedBytes-=length;reserved=false;}
-                Received.Enqueue(media);Reply(stream,context,201,"application/json; charset=utf-8",Encoding.UTF8.GetBytes("{\"received\":true,\"id\":\""+media.Id+"\"}"));
+                Received.Enqueue(media);Record(context,"UploadSaved",201,null);Reply(stream,context,201,"application/json; charset=utf-8",Encoding.UTF8.GetBytes("{\"received\":true,\"id\":\""+media.Id+"\"}"));
             }finally{if(reserved){lock(gate){inFlightUploads--;reservedBytes-=length;}}if(File.Exists(staging))File.Delete(staging);}
         }
         static string Header(Dictionary<string,string> headers,string key,int maximum){string value;return headers.TryGetValue(key,out value)?value.Substring(0,Math.Min(value.Length,maximum)):"";}

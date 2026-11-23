@@ -24,7 +24,7 @@
         catch{$selfTest.status='failed';$selfTest.errorType=$_.Exception.GetType().Name}
     }
     [pscustomobject]@{
-        id=[guid]::NewGuid().ToString('N');point=$point;selectedLocalIpv4=$address;port=if($Receiver){$Receiver.Port}else{$null}
+        id=[guid]::NewGuid().ToString('N');point=$point;tool=Get-ToolIdentity;selectedLocalIpv4=$address;port=if($Receiver){$Receiver.Port}else{$null}
         adapter=$adapterInfo;firewallProfiles=$firewall;receiverBeforeSelfTest=$before;localHttpSelfTest=$selfTest
         receiverAfterSelfTest=if($Receiver){$Receiver.NetworkSnapshot()}else{$null}
         manualObservation=$null
@@ -63,12 +63,18 @@ function Show-PhoneConnectionDiagnostics {
     $comparison=New-UiCombo @('未比較','同じURLが別ブラウザーでは開ける','同じURLが別ブラウザーでも開けない');Add-UiField $grid 2 '別ブラウザーとの比較' $comparison
     $note=New-Object Windows.Forms.TextBox;$note.Multiline=$true;$note.ScrollBars='Vertical';$note.Dock='Fill';Add-UiField $grid 3 '画面のエラー文・備考' $note
     Add-UiGuide $grid 4 '保存するとLAN内IP・ポート・接続履歴と入力内容が調査記録／ZIPへ入ります。HTTP応答が来ていない場合、ステータスコードは空欄で構いません。'
-    $save=New-UiButton '診断を記録へ保存';$save.Enabled=$false;$close=New-UiButton '閉じる';$close.DialogResult='Cancel';$actions=New-Object Windows.Forms.FlowLayoutPanel;$actions.Dock='Fill';$actions.Controls.AddRange([Windows.Forms.Control[]]@($save,$close));$grid.Controls.Add($actions,1,5);$dialog.Controls.Add($grid)
+    $import=New-UiButton 'スマホの送信ログを選択';$import.Enabled=$false
+    $save=New-UiButton '診断を記録へ保存';$save.Enabled=$false;$close=New-UiButton '閉じる';$close.DialogResult='Cancel';$actions=New-Object Windows.Forms.FlowLayoutPanel;$actions.Dock='Fill';$actions.Controls.AddRange([Windows.Forms.Control[]]@($import,$save,$close));$grid.Controls.Add($actions,0,5);$grid.SetColumnSpan($actions,2);$dialog.Controls.Add($grid)
     $job=[PowerShell]::Create();[void]$job.AddScript({param($core,$inventory,$receiver,$address);$ErrorActionPreference='Stop';. $core;. $inventory;Get-PhoneConnectionDiagnostics $receiver $address}).AddArgument((Join-Path $PSScriptRoot 'Core.ps1')).AddArgument((Join-Path $PSScriptRoot 'Inventory.ps1')).AddArgument($receiver).AddArgument($selected)
-    $state=[pscustomobject]@{handle=$job.BeginInvoke();report=$null};$refresh=New-Object Windows.Forms.Timer;$refresh.Interval=200
-    $refresh.Add_Tick({if($state.handle.IsCompleted){$refresh.Stop();try{$value=@($job.EndInvoke($state.handle));if($job.HadErrors -or $value.Count -ne 1){throw 'Connection diagnosis failed'};$state.report=$value[0];$summary.Text=Get-PhoneConnectionSummary $state.report;$save.Enabled=$true;if($SmokeTest){$browser.Text='Android / Firefox Beta (synthetic)';$note.Text='Synthetic connection observation';$save.PerformClick()}}catch{$summary.Text='接続診断の一部を取得できませんでした。受付状態とブラウザーのエラーを確認してください。';if($SmokeTest){$dialog.Close()}}}})
+    $state=[pscustomobject]@{handle=$job.BeginInvoke();report=$null;browserLog=$null};$refresh=New-Object Windows.Forms.Timer;$refresh.Interval=200
+    $refresh.Add_Tick({if($state.handle.IsCompleted){$refresh.Stop();try{$value=@($job.EndInvoke($state.handle));if($job.HadErrors -or $value.Count -ne 1){throw 'Connection diagnosis failed'};$state.report=$value[0];$summary.Text=Get-PhoneConnectionSummary $state.report;$save.Enabled=$true;$import.Enabled=$true;if($SmokeTest){$browser.Text='Android / Chrome (synthetic)';$note.Text='Synthetic connection observation';if($script:phoneLogFixture){$state.browserLog=Read-BrowserUploadLog $script:phoneLogFixture};$save.PerformClick()}}catch{$summary.Text='接続診断の一部を取得できませんでした。受付状態とブラウザーのエラーを確認してください。';if($SmokeTest){$dialog.Close()}}}})
+    $import.Add_Click({
+        $picker=New-Object Windows.Forms.OpenFileDialog;$picker.Filter='スマホの送信ログ (*.json)|*.json'
+        try{if($picker.ShowDialog($dialog) -eq 'OK'){$state.browserLog=Read-BrowserUploadLog $picker.FileName;$summary.AppendText("`r`n`r`n"+'スマホの送信ログ '+@($state.browserLog.attempts).Count+'件を選択しました。下の保存ボタンで診断に含めます。')}}catch{Show-UiError $_.Exception.Message}finally{$picker.Dispose()}
+    })
     $save.Add_Click({try{
         $state.report.manualObservation=[pscustomobject]@{deviceAndBrowser=Protect-PhoneDiagnosticNote $browser.Text;otherBrowser=[string]$comparison.SelectedItem;errorText=Protect-PhoneDiagnosticNote $note.Text;scope='利用者が入力した観察。Firefoxのネットワークログを自動取得したものではありません。'}
+        if($state.browserLog){$state.report|Add-Member -NotePropertyName browserUploadDiagnostics -NotePropertyValue $state.browserLog}
         Add-PhoneConnectionReport $state.report
         $dialog.DialogResult='OK';$dialog.Close()
     }catch{Show-UiError $_.Exception.Message}})

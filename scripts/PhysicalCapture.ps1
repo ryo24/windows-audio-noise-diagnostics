@@ -27,7 +27,7 @@ function Add-PhysicalMedia {
     if(-not $script:session.PSObject.Properties['physicalRecordings']){$script:session|Add-Member -NotePropertyName physicalRecordings -NotePropertyValue @()}
     $probe=Get-SelectedAudioProbe
     $probeId=if($script:recordingProbe -and $script:audioRecorder){$script:recordingProbe.id}elseif($probe){$probe.id}else{''}
-    $testId=if($script:activeTest){$script:activeTest.id}else{''}
+    $testId=if($script:activeTest){$script:activeTest.id}elseif($probe){$probe.testId}else{''}
     $record=ConvertTo-PhysicalRecord $Media $probeId $testId
     $script:session.physicalRecordings=@($script:session.physicalRecordings)+@($record)
     [void](Add-TimelineEvent $script:session 'PhysicalFileImported' $testId $probeId ('physicalId='+$record.id+'; not a recording-start time'))
@@ -133,8 +133,8 @@ function New-PhoneCaptureTab {
     $tab=New-Object Windows.Forms.TabPage;$tab.Text='スマホ・実音取り込み';$tab.Padding=New-Object Windows.Forms.Padding(10);$tab.AutoScroll=$true
     $grid=New-Object Windows.Forms.TableLayoutPanel;$grid.Dock='Top';$grid.Height=430;$grid.MinimumSize=New-Object Drawing.Size(0,430);$grid.ColumnCount=2;$grid.RowCount=8
     [void]$grid.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Absolute',160)));[void]$grid.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Percent',100)))
-    foreach($height in @(82,38,44,56,38,44,36,0)){$s=New-Object Windows.Forms.RowStyle;if($height -eq 0){$s.SizeType='Percent';$s.Height=100}else{$s.SizeType='Absolute';$s.Height=$height};[void]$grid.RowStyles.Add($s)}
-    $help=New-UiLabel "同じLAN内でQRから録音・動画をPCへ送れます（PCは有線LAN、スマホはWi-Fiでも利用可能）。`r`n通常のLAN HTTPでは、端末の録音・カメラ起動またはファイル選択を使います。外部クラウドやトンネルは使用しません。`r`n信頼できるネットワークで利用してください。LAN内HTTPは暗号化されません。受付は15分で自動終了します。";$help.Dock='Fill';$help.AutoSize=$false;$grid.Controls.Add($help,0,0);$grid.SetColumnSpan($help,2)
+    foreach($height in @(106,38,44,56,38,44,36,0)){$s=New-Object Windows.Forms.RowStyle;if($height -eq 0){$s.SizeType='Percent';$s.Height=100}else{$s.SizeType='Absolute';$s.Height=$height};[void]$grid.RowStyles.Add($s)}
+    $help=New-UiLabel "同じLAN内でQRから録音・動画をPCへ送れます（PCは有線LAN、スマホはWi-Fiでも利用可能）。`r`nスマホで「付近のデバイス」「ローカルネットワーク」の許可が出たら、このPCへの接続を許可してください。`r`n拒否した場合はAndroidの設定 → アプリ → Chrome → 権限や、サイトの権限を確認します（項目がある場合）。`r`nマイク許可とは別です。端末の録音・カメラ／ファイル選択を使用。信頼するLANで利用してください（HTTPは暗号化なし）。";$help.Dock='Fill';$help.AutoSize=$false;$grid.Controls.Add($help,0,0);$grid.SetColumnSpan($help,2)
     $script:phoneAddress=New-UiCombo @();$phoneAddress.DisplayMember='Label';$script:phoneRefresh=New-UiButton 'LANアドレスを取得'
     $addresses=New-Object Windows.Forms.TableLayoutPanel;$addresses.Dock='Fill';$addresses.ColumnCount=2;[void]$addresses.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Percent',100)));[void]$addresses.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Absolute',180)))
     $addresses.Controls.Add($phoneAddress,0,0);$addresses.Controls.Add($phoneRefresh,1,0);$grid.Controls.Add((New-UiLabel 'スマホと同じLAN'),0,1);$grid.Controls.Add($addresses,1,1)
