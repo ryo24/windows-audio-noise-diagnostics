@@ -27,6 +27,12 @@ namespace AudioNoiseDiagnostics {
         [PreserveSig] int GetCurrentPadding(out uint frames);
         [PreserveSig] int IsFormatSupported(int mode, IntPtr format, out IntPtr closest);
         [PreserveSig] int GetMixFormat(out IntPtr format);
+        [PreserveSig] int GetDevicePeriod(out long normal, out long minimum);
+        [PreserveSig] int Start();
+        [PreserveSig] int Stop();
+        [PreserveSig] int Reset();
+        [PreserveSig] int SetEventHandle(IntPtr handle);
+        [PreserveSig] int GetService(ref Guid iid, [MarshalAs(UnmanagedType.IUnknown)] out object result);
     }
     public class EndpointInfo {
         public string Id;

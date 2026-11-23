@@ -1,5 +1,7 @@
 ﻿. (Join-Path $PSScriptRoot 'Bluetooth.ps1')
 
+. (Join-Path $PSScriptRoot 'AudioCapture.ps1')
+
 function Invoke-CollectionSection {
     param([scriptblock]$Read)
     try { [pscustomobject]@{ status='collected'; data=(& $Read); errorType=$null } }
@@ -14,7 +16,7 @@ function Get-AnonymousDeviceRef {
 }
 
 function Get-DefaultEndpoint {
-    if (-not ('AudioNoiseDiagnostics.Endpoint' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'AudioEndpoint.cs') -ErrorAction Stop }
+    Initialize-AudioInterop
     $info = [AudioNoiseDiagnostics.Endpoint]::Read()
     $name = '未取得'
     if ($info.Id -match '(\{[0-9a-fA-F-]+\})$') {

@@ -45,7 +45,7 @@ try {
         $parseErrors+=@($errors)
     }
     Assert-True ($parseErrors.Count -eq 0) 'All PowerShell files parse'
-    Add-Type -Path (Join-Path $root 'scripts\AudioEndpoint.cs') -ErrorAction Stop
+    Initialize-AudioInterop
     Assert-True ($null -ne ('AudioNoiseDiagnostics.Endpoint' -as [type])) 'Core Audio reader compiles'
     $profile=[pscustomobject]@{ speakerModel='Test speaker'; powerSource='PCのUSB'; cStates='Disabled'; observations='<script>alert(1)</script>' }
     $session=New-DiagnosticSession $profile
@@ -115,6 +115,51 @@ try {
     Assert-True ($partial.status -eq 'unavailable' -and $null -eq $partial.data) 'Collection errors never look like successful empty data'
     $deviceRef=Get-AnonymousDeviceRef 'USB\VID_1234&PID_5678\PRIVATE_SERIAL' 'a'
     Assert-True ($deviceRef -notmatch 'PRIVATE' -and $deviceRef -ne (Get-AnonymousDeviceRef 'USB\VID_1234&PID_5678\PRIVATE_SERIAL' 'b')) 'Device references are anonymized per session'
+
+    $audioRoot=Join-Path $temporary 'audio-source'
+    [IO.Directory]::CreateDirectory($audioRoot) | Out-Null
+    $probeRecord=New-AudioProbeRecord 'Reference' 'Speakers <unsafe>' '' 60
+    $reference=Resolve-AudioFile $audioRoot $probeRecord.files.reference
+    [IO.Directory]::CreateDirectory((Split-Path -Parent $reference)) | Out-Null
+    [AudioNoiseDiagnostics.AudioFiles]::GenerateReference($reference)
+    $secondReference=Join-Path $temporary 'reference-copy.wav'
+    [AudioNoiseDiagnostics.AudioFiles]::GenerateReference($secondReference)
+    $referenceWave=[AudioNoiseDiagnostics.WaveData]::Load($reference)
+    Assert-True ($referenceWave.Frames -eq 480000 -and $referenceWave.Format.Rate -eq 48000 -and $referenceWave.Format.Channels -eq 2 -and $referenceWave.Format.Bits -eq 16) 'Reference audio is a fixed ten-second 48 kHz stereo PCM WAV'
+    Assert-True ((Get-FileHash -LiteralPath $reference).Hash -eq (Get-FileHash -LiteralPath $secondReference).Hash) 'Generated reference audio is byte-identical across runs'
+    $peak=0.0
+    for($frame=0;$frame -lt $referenceWave.Frames;$frame+=113){$peak=[Math]::Max($peak,[Math]::Abs($referenceWave.Sample($frame,0)))}
+    Assert-True ($peak -gt 0.07 -and $peak -le 0.0801 -and $referenceWave.Sample(1000,0) -eq 0 -and $referenceWave.Sample(470000,1) -eq 0) 'Reference level is bounded and includes deliberate silent intervals'
+    $recordingPath=Resolve-AudioFile $audioRoot $probeRecord.files.recording
+    Copy-Item -LiteralPath $reference -Destination $recordingPath
+    $fixtureRecorder=[pscustomobject]@{Status='Completed';StartedUtc=[DateTime]::UtcNow.ToString('o');EndedUtc=[DateTime]::UtcNow.ToString('o');ElapsedSeconds=10;SampleRate=48000;Channels=2;Bits=16;CapturedFrames=480000;WrittenFrames=480000;InsertedSilenceFrames=0;PacketCount=100;Discontinuities=1;TimestampErrors=0;FlagEvents=@();SizeLimitReached=$false;ReferenceStartOffsetSeconds=0.1;ErrorCode=$null}
+    Complete-AudioProbeRecord $probeRecord $fixtureRecorder $audioRoot
+    Assert-True ($probeRecord.files.recordingSha256 -eq (Get-FileHash -LiteralPath $recordingPath).Hash -and $probeRecord.capture.discontinuities -eq 1) 'Recording metadata preserves hashes and stream flags without calling them audible noise'
+    $probeSession=New-DiagnosticSession $profile;$probeSession.audioProbes=@($probeRecord)
+    $probeRecord.verification.liveNoise='Yes';$probeRecord.verification.replayNoise='No'
+    $probeRecord.verification.reviewPlaybackCompleted=$false
+    Assert-True ((Get-AudioReportHtml $probeSession).Contains('照合は未完了')) 'Incomplete WAV replay cannot count as completed listening verification'
+    $probeRecord.verification.reviewPlaybackCompleted=$true
+    $audioHtml=Get-AudioReportHtml $probeSession
+    Assert-True ($audioHtml.Contains('PCが正常という判定にはしません') -and -not $audioHtml.Contains('<unsafe>')) 'Live noise absent from replay stays an unresolved finding and untrusted metadata is escaped'
+    $probeRecord.verification.replayNoise='Yes'
+    Assert-True ((Get-AudioReportHtml $probeSession).Contains('再生する出力側が新たにノイズ')) 'Noisy replay does not exclude noise added by the playback path'
+    $destination=Join-Path $temporary 'audio-import'
+    Import-SessionAudio $probeSession $audioRoot $destination
+    $imported=Resolve-AudioFile $destination $probeRecord.files.recording
+    Assert-True ((Get-FileHash -LiteralPath $imported).Hash -eq $probeRecord.files.recordingSha256) 'Session import copies referenced WAV files with their recorded hashes'
+    [IO.File]::WriteAllText($imported,'different local file')
+    $blocked=$false;try{Import-SessionAudio $probeSession $audioRoot $destination}catch{$blocked=$true}
+    Assert-True ($blocked -and [IO.File]::ReadAllText($imported) -eq 'different local file') 'Session import never overwrites a different local WAV'
+    $blocked=$false;try{Resolve-AudioFile $audioRoot '..\outside.wav' | Out-Null}catch{$blocked=$true}
+    Assert-True ($blocked) 'Audio paths cannot escape their session directory'
+    $probeRecord.status='NoAudioData'
+    Assert-True ((Get-AudioReportHtml $probeSession).Contains('ノイズなしとは判定できません')) 'No loopback packets cannot be interpreted as clean output'
+    $externalRecord=New-AudioProbeRecord 'ExternalApp' 'Fixture' '' 60
+    Assert-True ($null -eq $externalRecord.files.reference -and $null -eq $externalRecord.referenceId) 'External application recording does not schedule a reference tone'
+    Save-Session $probeSession $audioRoot
+    $savedProbe=Read-Session (Join-Path $audioRoot 'session.json')
+    Assert-True ($savedProbe.audioProbes[0].verification.liveNoise -eq 'Yes' -and $savedProbe.audioProbes[0].files.recordingSha256 -eq $probeRecord.files.recordingSha256) 'Audio capture and independent listening results round-trip in a compatible session log'
 
     & {
         function Read-WinRtBluetoothRadios { [pscustomobject]@{state='On';radioStates=@('On')} }

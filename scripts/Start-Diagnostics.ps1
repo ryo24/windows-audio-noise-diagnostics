@@ -1,7 +1,8 @@
-﻿param([switch]$SmokeTest, [string]$ScreenshotPath, [switch]$ExerciseWorkflow, [ValidateSet('Tests','Bluetooth')][string]$ScreenshotTab='Tests')
+﻿param([switch]$SmokeTest, [string]$ScreenshotPath, [switch]$ExerciseWorkflow, [switch]$ExerciseAudioWorkflow, [ValidateSet('Tests','Bluetooth','Audio')][string]$ScreenshotTab='Tests')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Core.ps1')
 . (Join-Path $PSScriptRoot 'Inventory.ps1')
+. (Join-Path $PSScriptRoot 'AudioUi.ps1')
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [Windows.Forms.Application]::EnableVisualStyles()
@@ -42,11 +43,12 @@ function New-UiCombo {
     param([string[]]$Values)
     $combo=New-Object Windows.Forms.ComboBox
     $combo.DropDownStyle='DropDownList'; $combo.Dock='Fill'; $combo.Margin=New-Object Windows.Forms.Padding(6)
-    $combo.Items.AddRange([object[]]$Values); $combo.SelectedIndex=0
+    $combo.Items.AddRange([object[]]$Values); if($combo.Items.Count -gt 0){$combo.SelectedIndex=0}
     return $combo
 }
 function Show-UiError {
     param($Failure)
+    if($SmokeTest){Write-Host ('UI validation error: '+$Failure+"`n"+$global:Error[0].ScriptStackTrace)}
     [Windows.Forms.MessageBox]::Show([string]$Failure,'処理を完了できません',[Windows.Forms.MessageBoxButtons]::OK,[Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
 }
 function Get-CurrentProfile {
@@ -67,17 +69,18 @@ function Save-CurrentSession {
     }
 }
 function Update-UiState {
-    $busy=($null -ne $script:worker -or $null -ne $script:bluetoothMonitor)
+    $busy=($null -ne $script:worker -or $null -ne $script:bluetoothMonitor -or $script:audioRecorder -or $script:audioPlayback)
     $running=$null -ne $script:activeTest
     $collect.Enabled=(-not $busy -and -not $running)
     $resume.Enabled=(-not $busy -and -not $running)
     $start.Enabled=($null -ne $script:session -and -not $busy -and -not $running)
     $skip.Enabled=$start.Enabled
-    $mark.Enabled=$running
-    $finish.Enabled=$running
+    $mark.Enabled=($running -or [bool]$script:audioRecorder)
+    $finish.Enabled=($running -and -not $script:audioRecorder -and -not $script:audioPlayback)
     foreach ($control in @($testChoice,$outputChoice,$powerChoice,$appName,$changeText,$notes,$reference,$speaker,$profilePower,$cStates,$observations,$btCondition,$inputActivity,$btSampling)) { $control.Enabled=(-not $busy -and -not $running) }
     $report.Enabled=($null -ne $script:session)
     $folder.Enabled=($null -ne $script:session)
+    Update-AudioUi
 }
 function Receive-BluetoothSamples {
     if (-not $script:bluetoothMonitor) { return }
@@ -154,7 +157,7 @@ $header=New-UiLabel ('Windows 音声ノイズ調査  /  v' + (Get-ToolIdentity).
 $header.Font=New-Object Drawing.Font('Yu Gothic UI',20,[Drawing.FontStyle]::Bold)
 $header.ForeColor=[Drawing.Color]::FromArgb(10,100,109)
 $layout.Controls.Add($header,0,0)
-$intro=New-UiLabel 'まずPC情報を収集 → 条件を一つ変えて比較 → ノイズ時刻を記録。設定変更・録音・外部送信は行いません。'
+$intro=New-UiLabel 'まずPC情報を収集 → 条件を比較 → 必要なら音声を録音・聞き直し。設定変更・外部送信は行いません。'
 $layout.Controls.Add($intro,0,1)
 
 $profileGrid=New-Object Windows.Forms.TableLayoutPanel
@@ -195,6 +198,8 @@ $btGrid.Controls.Add($btSampling,0,2); $btGrid.SetColumnSpan($btSampling,2)
 $btGrid.Controls.Add($btHelp,0,3); $btGrid.SetColumnSpan($btHelp,2)
 $btGrid.Controls.Add($btStatus,0,4); $btGrid.SetColumnSpan($btStatus,2); $btTab.Controls.Add($btGrid)
 $tabs.TabPages.AddRange([Windows.Forms.TabPage[]]@($testTab,$btTab,$historyTab)); $layout.Controls.Add($tabs,0,4)
+$audioTab=New-AudioCaptureTab;[void]$tabs.TabPages.Add($audioTab)
+$tabs.Add_SelectedIndexChanged({if($tabs.SelectedTab -eq $audioTab -and $audioOutput.Items.Count -eq 0){Refresh-AudioOutputs}})
 $testGrid=New-Object Windows.Forms.TableLayoutPanel; $testGrid.Dock='Fill'; $testGrid.ColumnCount=2; $testGrid.RowCount=7
 [void]$testGrid.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Absolute',175)))
 [void]$testGrid.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Percent',100)))
@@ -238,6 +243,7 @@ $collect.Add_Click({
         Write-AtomicText $profilePath ($profile | ConvertTo-Json -Depth 8)
         $script:session=New-DiagnosticSession $profile
         $script:sessionDirectory=Join-Path (Join-Path $script:dataRoot 'sessions') $script:session.id
+        Refresh-AudioRecords
         Save-CurrentSession
         Start-CollectionWorker 'inventory'
     } catch { Show-UiError $_.Exception.Message; Update-UiState }
@@ -254,9 +260,12 @@ $resume.Add_Click({
             $target=Join-Path $script:sessionDirectory 'session.json'
             if ([IO.Path]::GetFullPath($target) -ne [IO.Path]::GetFullPath($dialog.FileName) -and (Test-Path -LiteralPath $target)) { throw '同じIDの記録がすでにあります。保存先のsession.jsonを選択してください。' }
             foreach ($test in @($loaded.tests | Where-Object { $_.result -eq 'InProgress' })) { $test.result='Interrupted'; $test.endedUtc=$loaded.updatedUtc; $test.notes += ' / 前回の保存以降は観察時間不明のため中断として再開。' }
+            Import-SessionAudio $loaded (Split-Path -Parent $dialog.FileName) $script:sessionDirectory
+            foreach($probe in @($loaded.audioProbes | Where-Object {$_.status -in @('Starting','Recording')})){$probe.status='Interrupted';$probe.verification.reviewPlaybackCompleted=$false;$probe.verification.notes+=' 録音が中断され、WAVが未確定の可能性があります。'}
             $script:session=$loaded
             Set-ProfileControls $loaded.profile
             Save-CurrentSession
+            Refresh-AudioRecords
             $status.Text='記録を再開しました。前のテストは保持し、新しいテストを追加できます。'
             Update-UiState
         }
@@ -280,10 +289,11 @@ $start.Add_Click({
     } catch { Show-UiError $_.Exception.Message }
 })
 $mark.Add_Click({
-    if ($script:activeTest) {
+    if ($script:activeTest -or $script:audioRecorder) {
         try {
-            $script:activeTest.noiseUtc=@($script:activeTest.noiseUtc) + @([DateTime]::UtcNow.ToString('o'))
-            $script:activeTest.durationSeconds=[int]([DateTime]::UtcNow - [DateTime]::Parse($script:activeTest.startedUtc).ToUniversalTime()).TotalSeconds
+            $timestamp=[DateTime]::UtcNow.ToString('o')
+            if($script:activeTest){$script:activeTest.noiseUtc=@($script:activeTest.noiseUtc)+@($timestamp);$script:activeTest.durationSeconds=[int]([DateTime]::UtcNow - [DateTime]::Parse($script:activeTest.startedUtc).ToUniversalTime()).TotalSeconds}
+            if($script:audioRecorder -and -not $script:audioRecorder.Finished){$script:recordingProbe.noiseMarkersUtc=@($script:recordingProbe.noiseMarkersUtc)+@($timestamp);$script:recordingProbe.verification.liveNoise='Yes'}
             Save-CurrentSession
         } catch { Show-UiError $_.Exception.Message }
     }
@@ -301,7 +311,7 @@ $finish.Add_Click({
         $endNotes=New-Object Windows.Forms.TextBox; $endNotes.Multiline=$true; $endNotes.ScrollBars='Vertical'; $endNotes.Dock='Fill'; $endNotes.Text=$test.notes
         $accept=New-UiButton '保存'; $accept.Dock='Bottom'; $accept.DialogResult='OK'
         $answerForm.Controls.Add($endNotes); $answerForm.Controls.Add($answer); $answerForm.Controls.Add($explain); $answerForm.Controls.Add($accept); $answerForm.AcceptButton=$accept
-        if ($SmokeTest -and $ExerciseWorkflow) {
+        if ($SmokeTest -and ($ExerciseWorkflow -or $ExerciseAudioWorkflow)) {
             $answerForm.Add_Shown({ $endNotes.Text += ' / UI test completion'; $answer.SelectedIndex=2; $answerForm.DialogResult='OK'; $answerForm.Close() })
         }
         if ($answerForm.ShowDialog($form) -eq 'OK') {
@@ -330,6 +340,8 @@ $folder.Add_Click({ try { Start-Process explorer.exe -ArgumentList ('"' + $scrip
 
 $timer=New-Object Windows.Forms.Timer; $timer.Interval=500
 $timer.Add_Tick({
+    try{Poll-AudioJobs}catch{$status.Text='音声記録の保存に失敗しました。';Show-UiError $_.Exception.Message}
+    if($script:closing -and -not $script:audioRecorder -and -not $script:audioPlayback -and -not $script:worker -and -not $script:bluetoothMonitor){$form.Close();return}
     try { Receive-BluetoothSamples } catch { $status.Text='Bluetooth記録の保存に失敗しました。'; Show-UiError $_.Exception.Message }
     if ($script:activeTest) {
         $seconds=[int]([DateTime]::UtcNow - [DateTime]::Parse($script:activeTest.startedUtc).ToUniversalTime()).TotalSeconds
@@ -354,6 +366,7 @@ $timer.Add_Tick({
 })
 $form.Add_FormClosing({
     param($sender,$eventArgs)
+    if($script:audioRecorder -or $script:audioPlayback){if($script:audioRecorder){$script:audioRecorder.Stop()};if($script:audioPlayback){$script:audioPlayback.Stop()};if($script:bluetoothMonitor){[void]$script:bluetoothMonitor.cancel.Set()};$script:closing=$true;$eventArgs.Cancel=$true;$status.Text='音声ファイルを確定してから閉じます。';return}
     if ($script:worker) { $eventArgs.Cancel=$true; [Windows.Forms.MessageBox]::Show('情報の取得中です。取得が終わってから閉じてください。','取得中') | Out-Null; return }
     if ($script:activeTest) {
         try {
@@ -373,13 +386,42 @@ try {
     Update-UiState
     if ($SmokeTest) {
         $form.Show(); $form.PerformLayout(); [Windows.Forms.Application]::DoEvents()
-        if ($ExerciseWorkflow) {
+        if ($ExerciseWorkflow -or $ExerciseAudioWorkflow) {
             $speaker.Text='Local UI verification'; $cStates.SelectedIndex=1
             $collect.PerformClick()
             $timer.Start()
             $deadline=[DateTime]::UtcNow.AddSeconds(120)
             while (($script:worker -or $script:bluetoothMonitor) -and [DateTime]::UtcNow -lt $deadline) { [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
             if ($script:worker -or -not $script:session.inventory -or -not $start.Enabled) { throw 'The UI inventory workflow did not complete.' }
+            if($ExerciseAudioWorkflow){
+                $tabs.SelectedTab=$audioTab;Refresh-AudioOutputs
+                if($audioOutput.Items.Count -eq 0){throw 'Audio workflow validation requires an active render endpoint.'}
+                $audioConsent.Checked=$true;[void]$audioLength.Items.Add('3');$audioLength.SelectedItem='3'
+                $start.PerformClick()
+                $audioStart.PerformClick()
+                $deadline=[DateTime]::UtcNow.AddSeconds(15)
+                while($script:audioRecorder -and $script:audioRecorder.Status -eq 'Starting' -and [DateTime]::UtcNow -lt $deadline){[Windows.Forms.Application]::DoEvents();Start-Sleep -Milliseconds 50}
+                $audioNoise.PerformClick()
+                while($script:audioRecorder -and [DateTime]::UtcNow -lt $deadline){[Windows.Forms.Application]::DoEvents();Start-Sleep -Milliseconds 50}
+                if($script:audioRecorder -or $script:session.audioProbes[0].status -ne 'Completed'){throw 'UI loopback recording failed.'}
+                $finish.PerformClick()
+                $deadline=[DateTime]::UtcNow.AddSeconds(45)
+                while(($script:worker -or $script:bluetoothMonitor) -and [DateTime]::UtcNow -lt $deadline){[Windows.Forms.Application]::DoEvents();Start-Sleep -Milliseconds 50}
+                if($script:worker -or $script:bluetoothMonitor){throw 'Comparison evidence did not finish after the audio recording.'}
+                $audioReplay.PerformClick()
+                $deadline=[DateTime]::UtcNow.AddSeconds(15)
+                while($script:audioPlayback -and [DateTime]::UtcNow -lt $deadline){[Windows.Forms.Application]::DoEvents();Start-Sleep -Milliseconds 50}
+                if($script:audioPlayback -or -not $script:session.audioProbes[0].verification.reviewPlaybackCompleted){throw 'UI WAV replay did not complete.'}
+                $audioLive.SelectedIndex=1;$audioRecorded.SelectedIndex=2;$audioResemblance.SelectedIndex=2;$audioSaveReview.PerformClick()
+                $saved=Read-Session (Join-Path $script:sessionDirectory 'session.json')
+                if($saved.audioProbes[0].verification.replayNoise -ne 'No' -or $saved.audioProbes[0].noiseMarkersUtc.Count -ne 1){throw 'UI audio verification was not saved.'}
+                $start.PerformClick();$audioMode.SelectedIndex=1;$audioStart.PerformClick();$form.Close()
+                $deadline=[DateTime]::UtcNow.AddSeconds(15)
+                while(($script:audioRecorder -or $script:bluetoothMonitor) -and [DateTime]::UtcNow -lt $deadline){[Windows.Forms.Application]::DoEvents();Start-Sleep -Milliseconds 50}
+                $saved=Read-Session (Join-Path $script:sessionDirectory 'session.json')
+                if($script:audioRecorder -or $script:bluetoothMonitor -or $saved.audioProbes.Count -ne 2 -or $saved.audioProbes[1].status -in @('Starting','Recording') -or $saved.tests[1].result -ne 'Interrupted'){throw 'Closing during recording did not finalize the WAV and comparison.'}
+                Write-Output 'UI reference playback, loopback recording, marker, WAV replay, verification and close/finalization OK'
+            }else{
             $testChoice.SelectedIndex=7
             $start.PerformClick()
             $deadline=[DateTime]::UtcNow.AddSeconds(20)
@@ -398,9 +440,11 @@ try {
             $saved=Read-Session (Join-Path $script:sessionDirectory 'session.json')
             if ($saved.tests.Count -ne 2 -or $saved.tests[1].result -ne 'Interrupted' -or $saved.profile.cStates -ne 'Disabled') { throw 'The UI did not preserve the interrupted test/profile.' }
             Write-Output 'UI inventory, test completion, events, marker and interruption workflow OK'
+            }
         }
-        if ($ScreenshotPath -and -not $ExerciseWorkflow) {
+        if ($ScreenshotPath -and -not $ExerciseWorkflow -and -not $ExerciseAudioWorkflow) {
             if ($ScreenshotTab -eq 'Bluetooth') { $tabs.SelectedTab=$btTab; [Windows.Forms.Application]::DoEvents() }
+            if ($ScreenshotTab -eq 'Audio') { $tabs.SelectedTab=$audioTab; [Windows.Forms.Application]::DoEvents() }
             [IO.Directory]::CreateDirectory((Split-Path -Parent ([IO.Path]::GetFullPath($ScreenshotPath)))) | Out-Null
             $bitmap=New-Object Drawing.Bitmap($form.Width,$form.Height)
             $form.DrawToBitmap($bitmap,(New-Object Drawing.Rectangle(0,0,$form.Width,$form.Height)))
@@ -411,5 +455,7 @@ try {
 } finally {
     $timer.Stop(); $timer.Dispose(); $form.Dispose()
     if ($script:bluetoothMonitor) { [void]$script:bluetoothMonitor.cancel.Set(); $script:bluetoothMonitor.worker.Stop(); $script:bluetoothMonitor.worker.Dispose(); $script:bluetoothMonitor.cancel.Dispose() }
+    if($script:audioRecorder){$script:audioRecorder.Dispose();Complete-AudioProbeRecord $script:recordingProbe $script:audioRecorder $script:sessionDirectory;Save-CurrentSession}
+    if($script:audioPlayback){$script:audioPlayback.Dispose()}
     if ($script:toolLock) { $script:toolLock.Dispose() }
 }

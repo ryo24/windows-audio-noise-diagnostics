@@ -50,6 +50,7 @@ function New-DiagnosticSession {
         profile = $Profile
         inventory = $null
         tests = @()
+        audioProbes = @()
     }
 }
 
@@ -231,6 +232,7 @@ function Get-ReportHtml {
     $profileJson = ConvertTo-HtmlText ($Session.profile | ConvertTo-Json -Depth 8)
     $inventoryJson = ConvertTo-HtmlText ($Session.inventory | ConvertTo-Json -Depth 14)
     $bluetoothHtml=Get-BluetoothReportHtml $Session
+    $audioHtml=Get-AudioReportHtml $Session
     $driverEvidenceHtml=(@($Session.tests | Where-Object { $null -ne $_.driverSnapshot } | ForEach-Object {
         '<details><summary>ドライバー変更テストの再取得情報: ' + (ConvertTo-HtmlText $_.id) + '</summary><pre>' + (ConvertTo-HtmlText ($_.driverSnapshot | ConvertTo-Json -Depth 14)) + '</pre></details>'
     })) -join "`n"
@@ -253,6 +255,7 @@ function Get-ReportHtml {
 <h2>確認結果と次の手順</h2>$assessments
 <h2>比較テストの記録</h2><p>時刻はUTC。ノイズ回数は手動ボタンの回数で、波形やノイズの自動検出ではありません。</p><div class="scroll"><table><thead><tr><th>ID / テスト</th><th>接続 / 電源 / アプリ</th><th>変更 / 備考 / 比較先</th><th>結果 / 観察時間</th><th>開始 / 終了 / ノイズ時刻</th><th>実行版</th></tr></thead><tbody>$tests</tbody></table></div>
 $bluetoothHtml
+$audioHtml
 <h2>利用者が確認した情報</h2><pre>$profileJson</pre>
 <h2>自動取得した情報</h2><p>最初の情報はcapturedUtc時点の状態です。ドライバー変更テストでは終了時に音声デバイス情報を再取得し、別に保存します。</p><details><summary>初回取得のPC・ドライバー・関連イベントを開く</summary><pre>$inventoryJson</pre></details>$driverEvidenceHtml
 <h2>情報源と適用範囲</h2><article><ul>
@@ -261,7 +264,7 @@ $bluetoothHtml
 <li><a href="https://learn.microsoft.com/en-us/windows/win32/properties/props-system-devices-aep-isconnected">Microsoftの接続状態プロパティ</a>：Windowsが示す接続状態。通信量や電波干渉を示す値ではありません。</li>
 <li><a href="https://learn.microsoft.com/en-us/windows-hardware/drivers/bluetooth/testing-bluetooth-main">MicrosoftのBluetooth調査資料</a>：通常の状態取得で不明な場合のWPR/ETW詳細調査。</li>
 </ul><p>基本情報の確認日：2026-11-16。Bluetooth情報の追加確認日：2026-11-19。公式ページの更新やBIOS・OSの違いにより、項目名や配布状況は変わります。</p></article>$manufacturerSources
-<p class="muted">この報告書はローカルで生成されています。GitHubへの送信や音声録音は行いません。ログを他者へ渡す前に、自由入力欄やデバイス名に個人情報がないか確認してください。</p>
+<p class="muted">この報告書はローカルで生成されています。GitHubへ自動送信しません。明示的に開始した録音には選択した出力の他アプリ・通知も含まれます。音声や自由入力欄を共有する前に内容を確認してください。</p>
 </main></body></html>
 "@
 }
