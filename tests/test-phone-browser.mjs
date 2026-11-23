@@ -41,9 +41,13 @@ try{
   const first=JSON.parse(fs.readFileSync(path.join(directory,'received-1.json'),'utf8'));
   assert.equal(first.PreviewConfirmed,true);assert.equal(first.HeardNoise,'Yes');assert.ok(first.Bytes>1000);assert.ok(first.CaptureStartedUtc);
   console.log('PASS: browser-generated fake-microphone recording uploads locally with observation metadata');
+  // hidden is also the initial HTML state. Wait for the deferred script to
+  // finish installing file handlers, even on a slow LAN or a busy CI runner.
+  await command('Network.enable');
+  await command('Network.emulateNetworkConditions',{offline:false,latency:200,downloadThroughput:1000000,uploadThroughput:1000000});
   await command('Page.addScriptToEvaluateOnNewDocument',{source:'Object.defineProperty(window,"isSecureContext",{get:()=>false,configurable:true});'});
   await command('Page.navigate',{url});
-  await until(()=>evaluate('!!document.getElementById("direct-controls") && document.getElementById("direct-controls").hidden'));
+  await until(()=>evaluate('document.readyState === "complete" && !!document.getElementById("direct-controls") && document.getElementById("direct-controls").hidden && document.getElementById("direct-note").textContent.includes("このLAN接続")'));
   const documentRoot=await command('DOM.getDocument');const input=await command('DOM.querySelector',{nodeId:documentRoot.root.nodeId,selector:'#saved-file'});
   await command('DOM.setFileInputFiles',{nodeId:input.nodeId,files:[path.join(directory,'fixture.wav')]});
   await until(()=>evaluate('!document.getElementById("send").disabled'));
@@ -51,6 +55,7 @@ try{
   await until(()=>fs.existsSync(path.join(directory,'received-2.json')));
   const second=JSON.parse(fs.readFileSync(path.join(directory,'received-2.json'),'utf8'));assert.equal(second.MimeType,'audio/wav');assert.equal(second.CaptureStartedUtc,'');
   console.log('PASS: insecure-context fallback hides unavailable direct recording and imports a selected local file');
+  await command('Network.emulateNetworkConditions',{offline:false,latency:0,downloadThroughput:-1,uploadThroughput:-1});
   const phoneShot=await command('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});fs.writeFileSync(path.join(directory,'phone.png'),Buffer.from(phoneShot.data,'base64'));
   await command('Emulation.setDeviceMetricsOverride',{width:1000,height:1000,deviceScaleFactor:1,mobile:false});await command('Page.navigate',{url:url+'pc'});
   await until(()=>evaluate('!!document.querySelector("#qrcode canvas, #qrcode img")'));
