@@ -54,7 +54,7 @@ $('send').addEventListener('click', async () => {
     if (!response.ok) throw new Error(response.status === 413 ? 'TooLarge' : response.status === 415 ? 'Format' : 'Receive');
     const result = await response.json();
     if (!result.received) throw new Error('Receive');
-    setStatus('PCへ送信しました。PCアプリの受信一覧で確認できます。スマホの元ファイルは消しません。');
+    setStatus('PCへ送信しました。PCアプリの「4 聞き直し・結果」で確認できます。スマホの元ファイルは消しません。');
   } catch (error) {
     setStatus(error.message === 'Format' ? 'この形式を受け取れません。音声・動画ファイルを選び直してください。' : '送信できませんでした。PCの受付、同じWi-Fi、ファイアウォール、QRの期限を確認して再送してください。元の記録は残っています。');
     $('send').disabled = false;

@@ -64,7 +64,7 @@ function Get-ReproductionReportHtml {
     param($Session)
     $content=@(foreach($test in @($Session.tests)){
         if($test.context -or $test.playbackSnapshots -or $test.conditions -or $test.timing){
-            $value=[pscustomobject]@{testId=$test.id;conditions=$test.conditions;timing=$test.timing;context=$test.context;playbackSnapshots=$test.playbackSnapshots}
+            $value=[pscustomobject]@{testId=$test.id;capturePlan=$test.capturePlan;conditions=$test.conditions;timing=$test.timing;context=$test.context;playbackSnapshots=$test.playbackSnapshots}
             '<details><summary>再現時の再生経路・ドライバー・時刻: '+(ConvertTo-HtmlText $test.id)+'</summary><pre>'+(ConvertTo-HtmlText ($value|ConvertTo-Json -Depth 18))+'</pre></details>'
         }
     }) -join "`n"

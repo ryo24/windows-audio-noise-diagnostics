@@ -2,168 +2,174 @@
 $script:audioPlayback=$null
 $script:recordingProbe=$null
 $script:playbackProbe=$null
-
 function Get-SelectedAudioProbe {
-    if ($audioRecords.SelectedIndex -ge 0) { return @($script:session.audioProbes)[$audioRecords.SelectedIndex] }
+    if($audioRecords.SelectedIndex -ge 0){return @($script:session.audioProbes)[$audioRecords.SelectedIndex]}
     return $null
 }
 function Refresh-AudioOutputs {
     try {
         Initialize-AudioInterop
-        $audioOutput.Items.Clear()
-        foreach ($endpoint in [AudioNoiseDiagnostics.AudioFiles]::Endpoints()) { [void]$audioOutput.Items.Add($endpoint) }
-        $audioInput.Items.Clear();foreach($inputDevice in [AudioNoiseDiagnostics.AudioFiles]::InputEndpoints()){[void]$audioInput.Items.Add($inputDevice)}
-        if($audioInput.Items.Count -gt 0){$audioInput.SelectedIndex=0}
-        if ($audioOutput.Items.Count -gt 0) {
-            $audioOutput.SelectedIndex=0
-            try { $default=[AudioNoiseDiagnostics.Endpoint]::Read().Id;for($i=0;$i -lt $audioOutput.Items.Count;$i++){if($audioOutput.Items[$i].Id -eq $default){$audioOutput.SelectedIndex=$i}} } catch { }
-            $audioStatus.Text='録音する出力を確認してください。最初は小音量で再生してください。'
-        } else { $audioStatus.Text='利用できる音声出力がありません。接続を確認し、一覧を再取得してください。' }
-    } catch { $audioStatus.Text='音声出力の一覧を取得できませんでした。接続とWindows Audioを確認してください。' }
-    Update-AudioUi
+        $selected=$audioOutput.SelectedItem.Id;$reviewSelected=$reviewOutput.SelectedItem.Id
+        $audioOutput.Items.Clear();$reviewOutput.Items.Clear();$audioInput.Items.Clear()
+        foreach($endpoint in [AudioNoiseDiagnostics.AudioFiles]::Endpoints()){[void]$audioOutput.Items.Add($endpoint);[void]$reviewOutput.Items.Add($endpoint)}
+        foreach($endpoint in [AudioNoiseDiagnostics.AudioFiles]::InputEndpoints()){[void]$audioInput.Items.Add($endpoint)}
+        $default=$null;try{$default=[AudioNoiseDiagnostics.Endpoint]::Read().Id}catch{}
+        foreach($combo in @($audioOutput,$reviewOutput)){
+            if($combo.Items.Count){$combo.SelectedIndex=0}
+            $preferred=if($combo -eq $audioOutput -and $selected){$selected}elseif($combo -eq $reviewOutput -and $reviewSelected){$reviewSelected}else{$default}
+            for($i=0;$i -lt $combo.Items.Count;$i++){if($combo.Items[$i].Id -eq $preferred){$combo.SelectedIndex=$i}}
+        }
+        if($audioInput.Items.Count){$audioInput.SelectedIndex=0}
+        $audioSetupStatus.Text=if($audioOutput.Items.Count){'出力を確認してください。開始は「3 調査する」のボタンだけです。'}else{'音声出力がありません。接続後に一覧を更新するか、録音なしを選んでください。'}
+    }catch{$audioSetupStatus.Text='音声デバイスを取得できません。接続を確認して一覧を更新してください。録音なしの調査は利用できます。'}
+    Update-UiState
 }
 function Refresh-AudioRecords {
-    $index=$audioRecords.SelectedIndex
     $audioRecords.Items.Clear()
-    foreach($record in @($script:session.audioProbes)){[void]$audioRecords.Items.Add(($record.createdUtc+' / '+$record.mode+' / '+$record.status))}
-    if($audioRecords.Items.Count -gt 0){$audioRecords.SelectedIndex=if($index -ge 0 -and $index -lt $audioRecords.Items.Count){$index}else{$audioRecords.Items.Count-1}}
+    foreach($record in @($script:session.audioProbes)){
+        $method=if($record.mode -eq 'Reference'){'テスト音声'}else{'アプリの音'}
+        [void]$audioRecords.Items.Add(($record.createdUtc+' / '+$method+' / '+$record.status))
+    }
+    if($audioRecords.Items.Count){$audioRecords.SelectedIndex=$audioRecords.Items.Count-1}
     Update-AudioUi
 }
-function Update-AudioUi {
-    if(-not $audioStart){return}
-    $occupied=($script:audioRecorder -or $script:audioPlayback)
-    $probe=Get-SelectedAudioProbe
+function Test-CaptureReady {
+    if($audioMode.SelectedIndex -eq 2){return $true}
     $needsOutput=($audioSource.SelectedIndex -eq 0 -or $audioMode.SelectedIndex -eq 0)
-    $endpointReady=(((-not $needsOutput) -or $audioOutput.SelectedIndex -ge 0) -and ($audioSource.SelectedIndex -eq 0 -or $audioInput.SelectedIndex -ge 0))
-    $audioStart.Enabled=($script:session -and (-not $script:worker -or $script:workerMode -eq 'context') -and -not $occupied -and $audioConsent.Checked -and $endpointReady)
-    $audioStop.Enabled=[bool]$occupied
-    $audioNoise.Enabled=[bool]$script:audioRecorder
-    foreach($control in @($audioOutput,$audioRefresh,$audioMode,$audioLength,$audioConsent,$audioRecords,$audioSource)){$control.Enabled=(-not $occupied)}
-    $audioInput.Enabled=(-not $occupied -and $audioSource.SelectedIndex -eq 1)
-    $canPlay=($probe -and -not $occupied -and -not $script:worker -and -not $script:activeTest -and $audioOutput.SelectedIndex -ge 0 -and $probe.status -in @('Completed','NoAudioData'))
-    $audioReplay.Enabled=[bool]$canPlay
-    $audioReference.Enabled=($canPlay -and [bool]$probe.files.reference)
-    $audioSaveReview.Enabled=($probe -and -not $occupied -and $probe.verification.reviewPlaybackCompleted)
+    return ($audioConsent.Checked -and (-not $needsOutput -or $audioOutput.SelectedIndex -ge 0) -and ($audioSource.SelectedIndex -eq 0 -or $audioInput.SelectedIndex -ge 0))
+}
+function Update-AudioUi {
+    if(-not $script:uiReady){return}
+    $occupied=($script:audioRecorder -or $script:audioPlayback)
+    $locked=($occupied -or $script:activeTest -or $script:worker)
+    $recording=$audioMode.SelectedIndex -ne 2
+    $audioMode.Enabled=(-not $locked)
+    foreach($control in @($audioOutput,$audioSource,$audioLength,$audioConsent)){$control.Enabled=(-not $locked -and $recording)}
+    $audioInput.Enabled=(-not $locked -and $recording -and $audioSource.SelectedIndex -eq 1)
+    $audioRefresh.Enabled=(-not $locked);$reviewRefresh.Enabled=(-not $locked)
+    $audioConsent.Text=if($audioSource.SelectedIndex -eq 1){'マイクが拾う会話・周囲の音も録音することを確認しました'}else{'選んだ出力に流れる他アプリ・通知の音も録音することを確認しました'}
+    $probe=Get-SelectedAudioProbe
+    $audioRecords.Enabled=(-not $occupied)
+    $reviewOutput.Enabled=(-not $occupied -and -not $script:activeTest)
+    $canPlay=($probe -and -not $occupied -and -not $script:worker -and -not $script:activeTest -and $reviewOutput.SelectedIndex -ge 0 -and $probe.status -in @('Completed','NoAudioData'))
+    $audioReplay.Enabled=[bool]$canPlay;$audioReference.Enabled=($canPlay -and [bool]$probe.files.reference)
+    $reviewStop.Enabled=[bool]$script:audioPlayback
+    $audioSaveReview.Enabled=($probe -and -not $occupied -and -not $script:activeTest -and $probe.verification.reviewPlaybackCompleted)
+    foreach($control in @($audioLive,$audioRecorded,$audioResemblance)){$control.Enabled=($probe -and -not $occupied -and -not $script:activeTest)}
+    if(-not $probe){$audioStatus.Text='保存した録音はまだありません。「2 条件を設定」で録音する方法を選び、「3 調査する」で開始してください。'}
+    elseif(-not $occupied -and -not $probe.verification.reviewPlaybackCompleted){$audioStatus.Text=if($probe.status -in @('Failed','Interrupted')){'この録音は失敗・中断しています。報告書で状態を確認してください。'}else{'① 出力を選ぶ → ② 録音を最後まで再生 → ③ 聞こえ方を選び、照合結果を保存します。'}}
+}
+function Start-ObservationCapture {
+    param([string]$TestId)
+    if($audioMode.SelectedIndex -eq 2){return}
+    if(-not (Test-CaptureReady)){throw '「2 条件を設定」で録音先と録音範囲を確認してください。'}
+    Initialize-AudioInterop
+    $mode=if($audioMode.SelectedIndex -eq 0){'Reference'}else{'ExternalApp'}
+    $name=if($audioOutput.SelectedItem){$audioOutput.SelectedItem.Name}else{'出力未選択'}
+    $probe=New-AudioProbeRecord $mode $name $TestId ([int]$audioLength.SelectedItem)
+    $probe|Add-Member -NotePropertyName playbackSnapshot -NotePropertyValue (Invoke-CollectionSection {Get-PlaybackSnapshot $script:session.id $audioOutput.SelectedItem.Id})
+    if($audioSource.SelectedIndex -eq 1){$probe.sourceKind='Microphone';$probe.inputEndpointName=$audioInput.SelectedItem.Name;$probe.files.recording='audio/'+$probe.id+'/microphone.wav';$probe.scope='マイク入力。周囲音・距離・マイクの処理も含みます。'}
+    if(-not $script:session.PSObject.Properties['audioProbes']){$script:session|Add-Member -NotePropertyName audioProbes -NotePropertyValue @()}
+    $script:session.audioProbes=@($script:session.audioProbes)+@($probe);$script:recordingProbe=$probe
+    [void](Add-TimelineEvent $script:session 'CaptureRequested' $TestId $probe.id);Save-CurrentSession
+    try {
+        $path=Resolve-AudioFile $script:sessionDirectory $probe.files.recording
+        [IO.Directory]::CreateDirectory((Split-Path -Parent $path))|Out-Null
+        $referencePath=$null
+        if($mode -eq 'Reference'){$referencePath=Resolve-AudioFile $script:sessionDirectory $probe.files.reference;[AudioNoiseDiagnostics.AudioFiles]::GenerateReference($referencePath)}
+        if($probe.sourceKind -eq 'Microphone'){$script:audioRecorder=[AudioNoiseDiagnostics.AudioProbe]::StartMicrophone($audioInput.SelectedItem.Id,$audioOutput.SelectedItem.Id,$path,$referencePath,$probe.maximumSeconds)}
+        else{$script:audioRecorder=[AudioNoiseDiagnostics.AudioProbe]::Start($audioOutput.SelectedItem.Id,$path,$referencePath,$probe.maximumSeconds)}
+    }catch{$probe.status='Failed';Save-CurrentSession;Refresh-AudioRecords;throw}
 }
 function Poll-AudioJobs {
     if($script:audioRecorder){
-        $audioStatus.Text=('録音 '+[Math]::Round($script:audioRecorder.ElapsedSeconds,1)+'秒 / '+$script:audioRecorder.Status+'。聞こえたノイズはボタンで記録してください。')
+        $runAudioStatus.Text=('録音中：'+[Math]::Round($script:audioRecorder.ElapsedSeconds,1)+' / '+$script:recordingProbe.maximumSeconds+'秒。聞こえたノイズをボタンで記録してください。')
         if($script:audioRecorder.Finished){
             Complete-AudioProbeRecord $script:recordingProbe $script:audioRecorder $script:sessionDirectory
             $script:audioRecorder.Dispose();$script:audioRecorder=$null
             Save-CurrentSession;Refresh-AudioRecords
-            $audioRecords.SelectedIndex=$audioRecords.Items.Count-1
-            $audioStatus.Text=('録音を保存しました: '+$script:recordingProbe.status+'。通常テスト中なら先に終了し、録音を再生して照合してください。')
+            $runAudioStatus.Text='録音を保存しました：'+$script:recordingProbe.status
+            if($script:activeTest -and -not $script:closing){
+                $capture=$script:recordingProbe.capture
+                $point=if($capture.endedQpc){[pscustomobject]@{utc=$capture.endedUtc;qpc=$capture.endedQpc;frequency=$capture.qpcFrequency}}else{Get-ClockPoint}
+                Request-ObservationFinish $point
+            }
             Update-UiState
         }
     }
     if($script:audioPlayback){
-        $audioStatus.Text=('再生確認 '+[Math]::Round($script:audioPlayback.PlayedSeconds,1)+'秒 / '+$script:audioPlayback.Status)
+        $audioStatus.Text=('聞き直し中：'+[Math]::Round($script:audioPlayback.PlayedSeconds,1)+'秒。新しい調査は開始しません。')
         if($script:audioPlayback.Finished){
-            if($script:playbackKind -eq 'Recording'){
-                $script:playbackProbe.verification.reviewPlaybackCompleted=$script:audioPlayback.Completed
-                $script:playbackProbe.verification.reviewPlayedSeconds=$script:audioPlayback.PlayedSeconds
-            } elseif($script:audioPlayback.Completed){$script:playbackProbe.verification.referencePlayed=$true}
-            $completed=$script:audioPlayback.Completed
-            $script:audioPlayback.Dispose();$script:audioPlayback=$null
+            if($script:playbackKind -eq 'Recording'){$script:playbackProbe.verification.reviewPlaybackCompleted=$script:audioPlayback.Completed;$script:playbackProbe.verification.reviewPlayedSeconds=$script:audioPlayback.PlayedSeconds}
+            elseif($script:audioPlayback.Completed){$script:playbackProbe.verification.referencePlayed=$true}
+            $completed=$script:audioPlayback.Completed;$script:audioPlayback.Dispose();$script:audioPlayback=$null
             Save-CurrentSession;Update-UiState
-            $audioStatus.Text=if($completed){'再生完了。実際の出力と録音の聞こえ方を選び「照合結果を保存」を押してください。'}else{'再生を停止したか、再生できませんでした。途中再生を全体の確認済みにはしません。'}
+            $audioStatus.Text=if($completed){'再生が終わりました。聞こえ方を選び、「照合結果を保存」を押してください。'}else{'途中で停止しました。録音全体の確認済みにはしていません。'}
         }
     }
 }
 function Start-AudioReview {
     param([string]$Kind)
-    try{
+    try {
         $probe=Get-SelectedAudioProbe
         $relative=if($Kind -eq 'Reference'){$probe.files.reference}else{$probe.files.recording}
         $path=Resolve-AudioFile $script:sessionDirectory $relative
-        if(-not (Test-Path -LiteralPath $path)){throw 'WAVがありません。session.jsonだけでなくaudioフォルダーを含むセッション一式をコピーしてください。'}
+        if(-not (Test-Path -LiteralPath $path)){throw '録音ファイルがありません。音声を含むZIPまたはセッション一式を確認してください。'}
         $expected=if($Kind -eq 'Reference'){$probe.files.referenceSha256}else{$probe.files.recordingSha256}
-        if($expected -and (Get-FileHash -LiteralPath $path).Hash -ne $expected){throw '保存したWAVのハッシュが一致しません。ファイルを確認してください。'}
+        if($expected -and (Get-FileHash -LiteralPath $path).Hash -ne $expected){throw '録音のハッシュが一致しません。'}
         $script:playbackProbe=$probe;$script:playbackKind=$Kind
-        if($Kind -eq 'Recording'){
-            $probe.verification.reviewPlaybackCompleted=$false
-            $probe.verification.reviewEndpointName=$audioOutput.SelectedItem.Name
-            $probe.verification.reviewStartedUtc=[DateTime]::UtcNow.ToString('o')
-            $probe.verification.replayNoise='Unreviewed';$probe.verification.resemblance='Unreviewed'
-        }
-        $script:audioPlayback=[AudioNoiseDiagnostics.AudioPlayback]::Start($audioOutput.SelectedItem.Id,$path)
-        Update-UiState
+        if($Kind -eq 'Recording'){$probe.verification.reviewPlaybackCompleted=$false;$probe.verification.reviewEndpointName=$reviewOutput.SelectedItem.Name;$probe.verification.reviewStartedUtc=[DateTime]::UtcNow.ToString('o');$probe.verification.replayNoise='Unreviewed';$probe.verification.resemblance='Unreviewed'}
+        $script:audioPlayback=[AudioNoiseDiagnostics.AudioPlayback]::Start($reviewOutput.SelectedItem.Id,$path);Update-UiState
     }catch{Show-UiError $_.Exception.Message}
 }
-function New-AudioCaptureTab {
-    $tab=New-Object Windows.Forms.TabPage;$tab.Text='テスト音声・録音・聞き直し';$tab.Padding=New-Object Windows.Forms.Padding(10);$tab.AutoScroll=$true
-    $grid=New-Object Windows.Forms.TableLayoutPanel;$grid.Dock='Top';$grid.Height=490;$grid.MinimumSize=New-Object Drawing.Size(0,490);$grid.ColumnCount=2;$grid.RowCount=10
-    [void]$grid.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Absolute',160)));[void]$grid.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Percent',100)))
-    foreach($height in @(74,40,44,36,32,44,44,36,56,0)){$style=New-Object Windows.Forms.RowStyle;if($height -eq 0){$style.SizeType='Percent';$style.Height=100}else{$style.SizeType='Absolute';$style.Height=$height};[void]$grid.RowStyles.Add($style)}
-    $help=New-UiLabel "デジタル出力の録音、または挿したマイクからの録音を選べます。`r`nデジタル録音ではアナログ回路以降のノイズが入らない場合があります。マイクはスピーカー近くへ置き、周囲の音も記録します。`r`nまず小音量で開始。聞き直しは可能ならHDMIなど別の出力でも比較してください。"
-    $help.Dock='Fill';$help.AutoSize=$false;$grid.Controls.Add($help,0,0);$grid.SetColumnSpan($help,2)
+function New-AudioSettingsTab {
+    $tab=New-UiPage '音の調べ方'
+    $grid=New-UiGrid @(82,46,46,46,46,56,64) 190
+    Add-UiGuide $grid 0 "ここでは条件を選ぶだけです。開始ボタンは「3 調査する」に一つだけあります。`r`nテスト音声：PCが共通の音を流して録音。アプリの音：自分でアプリを再生。`r`n録音なし：耳で確認し、ノイズ時刻・構成・Bluetooth状態を記録します。"
+    $script:audioMode=New-UiCombo @('テスト音声で調べる（再生＋録音）','普段のアプリの音を調べる（録音）','録音せず、耳で確認する')
+    $script:audioSource=New-UiCombo @('Windows内部の音（ループバック）','接続したマイクで拾う実音')
     $script:audioOutput=New-UiCombo @();$audioOutput.DisplayMember='Name'
-    $script:audioRefresh=New-UiButton '出力一覧を取得'
-    $outputs=New-Object Windows.Forms.TableLayoutPanel;$outputs.ColumnCount=2;$outputs.Dock='Fill';[void]$outputs.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Percent',100)));[void]$outputs.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Absolute',155)))
-    $outputs.Controls.Add($audioOutput,0,0);$outputs.Controls.Add($audioRefresh,1,0);$grid.Controls.Add((New-UiLabel '録音・再生する出力'),0,1);$grid.Controls.Add($outputs,1,1)
-    $script:audioMode=New-UiCombo @('共通テスト音声を再生して録音','他アプリの音を録音（テスト音なし）')
-    $script:audioLength=New-UiCombo @('30','60','120','300');$audioLength.SelectedIndex=1
-    $options=New-Object Windows.Forms.TableLayoutPanel;$options.ColumnCount=3;$options.Dock='Fill'
-    foreach($width in @(75,10,15)){[void]$options.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Percent',$width)))}
-    $options.Controls.Add($audioMode,0,0);$options.Controls.Add((New-UiLabel '秒数'),1,0);$options.Controls.Add($audioLength,2,0);$grid.Controls.Add((New-UiLabel '録音モード・上限'),0,2);$grid.Controls.Add($options,1,2)
-    $script:audioConsent=New-Object Windows.Forms.CheckBox;$audioConsent.Text='この出力に流れる他アプリ・通知も録音されることを確認しました';$audioConsent.AutoSize=$true
-    $grid.Controls.Add($audioConsent,0,3);$grid.SetColumnSpan($audioConsent,2)
-    $script:audioStart=New-UiButton '再生・録音を開始';$script:audioStop=New-UiButton '録音・再生を停止';$script:audioNoise=New-UiButton 'いまノイズが聞こえた'
-    $buttons=New-Object Windows.Forms.FlowLayoutPanel;$buttons.Dock='Fill';$buttons.Controls.AddRange([Windows.Forms.Control[]]@($audioStart,$audioStop,$audioNoise));$grid.Controls.Add($buttons,0,4);$grid.SetColumnSpan($buttons,2)
-    $script:audioStatus=New-UiLabel '最大5分／音声データ256MBで停止します。音声ファイルはdata内だけに保存します。';$audioStatus.Dock='Fill';$audioStatus.AutoSize=$false
-    $grid.Controls.Add($audioStatus,0,5);$grid.SetColumnSpan($audioStatus,2)
-    $script:audioRecords=New-UiCombo @();$grid.Controls.Add((New-UiLabel '保存した録音'),0,6);$grid.Controls.Add($audioRecords,1,6)
-    $script:audioReplay=New-UiButton '録音を再生';$script:audioReference=New-UiButton '元のテスト音を再生';$script:audioSaveReview=New-UiButton '照合結果を保存'
-    $reviewButtons=New-Object Windows.Forms.FlowLayoutPanel;$reviewButtons.Dock='Fill';$reviewButtons.Controls.AddRange([Windows.Forms.Control[]]@($audioReplay,$audioReference,$audioSaveReview));$grid.Controls.Add($reviewButtons,0,7);$grid.SetColumnSpan($reviewButtons,2)
-    $reviewGrid=New-Object Windows.Forms.TableLayoutPanel;$reviewGrid.Dock='Fill';$reviewGrid.ColumnCount=3
-    foreach($width in @(33,33,34)){[void]$reviewGrid.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Percent',$width)))}
-    $script:audioLive=New-UiCombo @('実際の出力：未確認','実際の出力：ノイズあり','実際の出力：ノイズなし')
-    $script:audioRecorded=New-UiCombo @('録音：未確認','録音：ノイズあり','録音：ノイズなし','録音：判断できない')
-    $script:audioResemblance=New-UiCombo @('聞こえ方：未確認','実際の出力と同じ','実際の出力と異なる','同じか判断できない')
-    $reviewGrid.Controls.Add($audioLive,0,0);$reviewGrid.Controls.Add($audioRecorded,1,0);$reviewGrid.Controls.Add($audioResemblance,2,0)
-    $grid.Controls.Add($reviewGrid,0,8);$grid.SetColumnSpan($reviewGrid,2);$tab.Controls.Add($grid)
-    foreach($control in @($grid.Controls | Sort-Object -Property @{Expression={$grid.GetRow($_)}} -Descending)){if($grid.GetRow($control) -ge 1){$grid.SetRow($control,$grid.GetRow($control)+1)}}
-    $script:audioSource=New-UiCombo @('デジタル出力（ループバック）','接続したマイク入力')
     $script:audioInput=New-UiCombo @();$audioInput.DisplayMember='Name'
-    $sources=New-Object Windows.Forms.TableLayoutPanel;$sources.ColumnCount=2;$sources.Dock='Fill'
-    foreach($width in @(45,55)){[void]$sources.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Percent',$width)))}
-    $sources.Controls.Add($audioSource,0,0);$sources.Controls.Add($audioInput,1,0);$grid.Controls.Add((New-UiLabel '録音元・マイク'),0,1);$grid.Controls.Add($sources,1,1)
-    $audioConsent.Text='選択した出力全体、またはマイクが拾う周囲の音が録音されることを確認しました'
-    $audioSource.Add_SelectedIndexChanged({Update-AudioUi});$audioMode.Add_SelectedIndexChanged({Update-AudioUi})
-    $audioRefresh.Add_Click({Refresh-AudioOutputs});$audioConsent.Add_CheckedChanged({Update-AudioUi})
-    $audioRecords.Add_SelectedIndexChanged({$record=Get-SelectedAudioProbe;if($record){$audioLive.SelectedIndex=[Math]::Max(0,[Array]::IndexOf(@('Unknown','Yes','No'),$record.verification.liveNoise));$audioRecorded.SelectedIndex=[Math]::Max(0,[Array]::IndexOf(@('Unreviewed','Yes','No','Unknown'),$record.verification.replayNoise));$audioResemblance.SelectedIndex=[Math]::Max(0,[Array]::IndexOf(@('Unreviewed','Same','Different','Uncertain'),$record.verification.resemblance))};Update-AudioUi})
-    $audioStart.Add_Click({
-        try{
-            Initialize-AudioInterop
-            $mode=if($audioMode.SelectedIndex -eq 0){'Reference'}else{'ExternalApp'}
-            $testId=if($script:activeTest){$script:activeTest.id}else{$null}
-            $outputName=if($audioOutput.SelectedItem){$audioOutput.SelectedItem.Name}else{'出力未選択'}
-            $probe=New-AudioProbeRecord $mode $outputName $testId ([int]$audioLength.SelectedItem)
-            $probe|Add-Member -NotePropertyName playbackSnapshot -NotePropertyValue (Invoke-CollectionSection {Get-PlaybackSnapshot $script:session.id $audioOutput.SelectedItem.Id})
-            if($audioSource.SelectedIndex -eq 1){$probe.sourceKind='Microphone';$probe.inputEndpointName=$audioInput.SelectedItem.Name;$probe.files.recording='audio/'+$probe.id+'/microphone.wav';$probe.scope='選択したマイク入力。実際のスピーカー音に加え、周囲音・距離・マイクの処理の影響も含みます。'}
-            if(-not $script:session.PSObject.Properties['audioProbes']){$script:session | Add-Member -NotePropertyName audioProbes -NotePropertyValue @()}
-            $script:session.audioProbes=@($script:session.audioProbes)+@($probe)
-            $audioCapturePath=Resolve-AudioFile $script:sessionDirectory $probe.files.recording
-            [IO.Directory]::CreateDirectory((Split-Path -Parent $audioCapturePath)) | Out-Null
-            $audioReferencePath=$null
-            if($mode -eq 'Reference'){$audioReferencePath=Resolve-AudioFile $script:sessionDirectory $probe.files.reference;[AudioNoiseDiagnostics.AudioFiles]::GenerateReference($audioReferencePath)}
-            $script:recordingProbe=$probe
-            [void](Add-TimelineEvent $script:session 'CaptureRequested' $testId $probe.id)
-            Save-CurrentSession
-            if($probe.sourceKind -eq 'Microphone'){$script:audioRecorder=[AudioNoiseDiagnostics.AudioProbe]::StartMicrophone($audioInput.SelectedItem.Id,$audioOutput.SelectedItem.Id,$audioCapturePath,$audioReferencePath,$probe.maximumSeconds)}
-            else{$script:audioRecorder=[AudioNoiseDiagnostics.AudioProbe]::Start($audioOutput.SelectedItem.Id,$audioCapturePath,$audioReferencePath,$probe.maximumSeconds)}
-            Update-UiState
-        }catch{if($probe -and $probe.status -eq 'Starting'){$probe.status='Failed';Save-CurrentSession;Refresh-AudioRecords};Show-UiError $_.Exception.Message}
-    })
-    $audioStop.Add_Click({if($script:audioRecorder){$script:audioRecorder.Stop()};if($script:audioPlayback){$script:audioPlayback.Stop()}})
-    $audioNoise.Add_Click({$mark.PerformClick()})
+    $script:audioLength=New-UiCombo @('30','60','120','300');$audioLength.SelectedIndex=1
+    Add-UiField $grid 1 '調べ方' $audioMode;Add-UiField $grid 2 '録音する音' $audioSource
+    Add-UiField $grid 3 '調査・録音の出力' $audioOutput;Add-UiField $grid 4 '使用するマイク' $audioInput
+    $options=New-Object Windows.Forms.FlowLayoutPanel;$options.Dock='Fill'
+    $audioLength.Dock='None';$audioLength.Width=85;$options.Controls.Add($audioLength);$options.Controls.Add((New-UiLabel '秒で録音と観察を終了'))
+    $script:audioRefresh=New-UiButton '音声デバイスを再取得';$options.Controls.Add($audioRefresh);Add-UiField $grid 5 '録音の長さ' $options
+    $script:audioConsent=New-Object Windows.Forms.CheckBox;$audioConsent.Dock='Fill';$audioConsent.Padding=New-Object Windows.Forms.Padding(8);$grid.Controls.Add($audioConsent,0,6);$grid.SetColumnSpan($audioConsent,2)
+    $script:audioSetupStatus=New-UiLabel '音声デバイスを読み込みます。';$audioSetupStatus.Dock='Top';$audioSetupStatus.Height=54;$audioSetupStatus.AutoSize=$false
+    $tab.Controls.Add($audioSetupStatus);$tab.Controls.Add($grid)
+    $audioRefresh.Add_Click({Refresh-AudioOutputs})
+    foreach($combo in @($audioMode,$audioSource,$audioOutput,$audioInput)){$combo.Add_SelectedIndexChanged({$audioConsent.Checked=$false;Update-UiState})}
+    $audioLength.Add_SelectedIndexChanged({Update-UiState})
+    $audioConsent.Add_CheckedChanged({Update-UiState})
+    return $tab
+}
+function New-AudioReviewTab {
+    $tab=New-UiPage 'PCで録音した音'
+    $grid=New-UiGrid @(78,44,44,52,44,44,44,52,64) 190
+    Add-UiGuide $grid 0 "保存した録音と、調査中に聞いたノイズを比べます。`r`n聞き直す出力は調査時と別に選べます。可能ならHDMIなど正常な経路も使ってください。`r`nここで再生しても新しい調査は始まりません。録音がきれいでも故障は否定できません。"
+    $script:audioRecords=New-UiCombo @();Add-UiField $grid 1 '① 保存した録音' $audioRecords
+    $script:reviewOutput=New-UiCombo @();$reviewOutput.DisplayMember='Name';$script:reviewRefresh=New-UiButton '出力一覧を更新'
+    $outputs=New-Object Windows.Forms.TableLayoutPanel;$outputs.Dock='Fill';$outputs.ColumnCount=2
+    [void]$outputs.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Percent',100)));[void]$outputs.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Absolute',150)))
+    $outputs.Controls.Add($reviewOutput,0,0);$outputs.Controls.Add($reviewRefresh,1,0);Add-UiField $grid 2 '② 聞き直す出力' $outputs
+    $script:audioReplay=New-UiButton '保存した録音を再生';$script:audioReference=New-UiButton '元のテスト音を再生';$script:reviewStop=New-UiButton '聞き直しを停止'
+    $buttons=New-Object Windows.Forms.FlowLayoutPanel;$buttons.Dock='Fill';$buttons.Controls.AddRange([Windows.Forms.Control[]]@($audioReplay,$audioReference,$reviewStop));$grid.Controls.Add($buttons,1,3)
+    $script:audioLive=New-UiCombo @('未確認','ノイズあり','ノイズなし')
+    $script:audioRecorded=New-UiCombo @('未確認','ノイズあり','ノイズなし','判断できない')
+    $script:audioResemblance=New-UiCombo @('未確認','同じ','異なる','判断できない')
+    Add-UiField $grid 4 '③ 調査中に聞いた実音' $audioLive;Add-UiField $grid 5 '録音を聞き直した音' $audioRecorded;Add-UiField $grid 6 '実音と録音の聞こえ方' $audioResemblance
+    $script:audioSaveReview=New-UiButton '照合結果を保存';$grid.Controls.Add($audioSaveReview,1,7)
+    $script:audioStatus=New-UiLabel '';$audioStatus.Dock='Fill';$audioStatus.AutoSize=$false;$grid.Controls.Add($audioStatus,0,8);$grid.SetColumnSpan($audioStatus,2);$tab.Controls.Add($grid)
+    $reviewRefresh.Add_Click({Refresh-AudioOutputs});$reviewStop.Add_Click({if($script:audioPlayback){$script:audioPlayback.Stop()}})
     $audioReplay.Add_Click({Start-AudioReview 'Recording'});$audioReference.Add_Click({Start-AudioReview 'Reference'})
-    $audioSaveReview.Add_Click({
-        try{$record=Get-SelectedAudioProbe;if(-not $record.verification.reviewPlaybackCompleted){throw '録音の再生を最後まで確認してから照合結果を保存してください。'}
-            $record.verification.liveNoise=@('Unknown','Yes','No')[$audioLive.SelectedIndex];$record.verification.replayNoise=@('Unreviewed','Yes','No','Unknown')[$audioRecorded.SelectedIndex];$record.verification.resemblance=@('Unreviewed','Same','Different','Uncertain')[$audioResemblance.SelectedIndex]
-            Save-CurrentSession;$audioStatus.Text='照合結果を保存しました。録音にノイズがなくても、実際の出力の異常を否定するものではありません。'
-        }catch{Show-UiError $_.Exception.Message}
-    })
+    $audioRecords.Add_SelectedIndexChanged({$record=Get-SelectedAudioProbe;if($record){$audioLive.SelectedIndex=[Math]::Max(0,[Array]::IndexOf(@('Unknown','Yes','No'),$record.verification.liveNoise));$audioRecorded.SelectedIndex=[Math]::Max(0,[Array]::IndexOf(@('Unreviewed','Yes','No','Unknown'),$record.verification.replayNoise));$audioResemblance.SelectedIndex=[Math]::Max(0,[Array]::IndexOf(@('Unreviewed','Same','Different','Uncertain'),$record.verification.resemblance))};Update-AudioUi})
+    $audioSaveReview.Add_Click({try {
+        $record=Get-SelectedAudioProbe
+        if(-not $record.verification.reviewPlaybackCompleted){throw '保存した録音を最後まで再生してから保存してください。'}
+        $record.verification.liveNoise=@('Unknown','Yes','No')[$audioLive.SelectedIndex];$record.verification.replayNoise=@('Unreviewed','Yes','No','Unknown')[$audioRecorded.SelectedIndex];$record.verification.resemblance=@('Unreviewed','Same','Different','Uncertain')[$audioResemblance.SelectedIndex]
+        Save-CurrentSession;$audioStatus.Text='保存しました。「5 書き出す」へ進むか、条件を変えて次の調査ができます。'
+    }catch{Show-UiError $_.Exception.Message}})
     return $tab
 }

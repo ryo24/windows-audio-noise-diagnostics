@@ -60,12 +60,14 @@ function Update-PhoneUi {
     $entry=Get-SelectedPhysicalRecord
     $physicalPlay.Enabled=($null -ne $entry)
     $physicalSave.Enabled=($entry -and $physicalReviewed.Checked)
+    foreach($control in @($physicalReviewed,$physicalHeard,$physicalRoute)){$control.Enabled=($null -ne $entry)}
+    if($script:session -and $phoneStatus.Text -like '先に*'){$phoneStatus.Text='スマホからの受信を開いてQRを表示するか、保存済みファイルを取り込めます。確認は「4 聞き直し・結果」で行います。'}
     if($receiving){$collect.Enabled=$false;$resume.Enabled=$false}
 }
 function Poll-PhoneReceiver {
     if(-not $script:phoneReceiver){return}
     $received=$null
-    while($script:phoneReceiver.Received.TryDequeue([ref]$received)){Add-PhysicalMedia $received;$phoneStatus.Text='記録を受信しました。下の一覧から再生確認できます。'}
+    while($script:phoneReceiver.Received.TryDequeue([ref]$received)){Add-PhysicalMedia $received;$phoneStatus.Text='受信しました。「4 聞き直し・結果 → スマホなどの実音」で再生確認できます。'}
     if($script:phoneReceiver.Finished){Stop-PhoneReceiver;$phoneStatus.Text='受付は停止・期限切れになりました。再開すると新しいQRになります。'}
 }
 function Stop-PhoneReceiver {
