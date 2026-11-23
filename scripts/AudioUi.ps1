@@ -35,7 +35,7 @@ function Update-AudioUi {
     $probe=Get-SelectedAudioProbe
     $needsOutput=($audioSource.SelectedIndex -eq 0 -or $audioMode.SelectedIndex -eq 0)
     $endpointReady=(((-not $needsOutput) -or $audioOutput.SelectedIndex -ge 0) -and ($audioSource.SelectedIndex -eq 0 -or $audioInput.SelectedIndex -ge 0))
-    $audioStart.Enabled=($script:session -and -not $script:worker -and -not $occupied -and $audioConsent.Checked -and $endpointReady)
+    $audioStart.Enabled=($script:session -and (-not $script:worker -or $script:workerMode -eq 'context') -and -not $occupied -and $audioConsent.Checked -and $endpointReady)
     $audioStop.Enabled=[bool]$occupied
     $audioNoise.Enabled=[bool]$script:audioRecorder
     foreach($control in @($audioOutput,$audioRefresh,$audioMode,$audioLength,$audioConsent,$audioRecords,$audioSource)){$control.Enabled=(-not $occupied)}
@@ -140,6 +140,7 @@ function New-AudioCaptureTab {
             $testId=if($script:activeTest){$script:activeTest.id}else{$null}
             $outputName=if($audioOutput.SelectedItem){$audioOutput.SelectedItem.Name}else{'出力未選択'}
             $probe=New-AudioProbeRecord $mode $outputName $testId ([int]$audioLength.SelectedItem)
+            $probe|Add-Member -NotePropertyName playbackSnapshot -NotePropertyValue (Invoke-CollectionSection {Get-PlaybackSnapshot $script:session.id $audioOutput.SelectedItem.Id})
             if($audioSource.SelectedIndex -eq 1){$probe.sourceKind='Microphone';$probe.inputEndpointName=$audioInput.SelectedItem.Name;$probe.files.recording='audio/'+$probe.id+'/microphone.wav';$probe.scope='選択したマイク入力。実際のスピーカー音に加え、周囲音・距離・マイクの処理の影響も含みます。'}
             if(-not $script:session.PSObject.Properties['audioProbes']){$script:session | Add-Member -NotePropertyName audioProbes -NotePropertyValue @()}
             $script:session.audioProbes=@($script:session.audioProbes)+@($probe)
@@ -147,7 +148,9 @@ function New-AudioCaptureTab {
             [IO.Directory]::CreateDirectory((Split-Path -Parent $audioCapturePath)) | Out-Null
             $audioReferencePath=$null
             if($mode -eq 'Reference'){$audioReferencePath=Resolve-AudioFile $script:sessionDirectory $probe.files.reference;[AudioNoiseDiagnostics.AudioFiles]::GenerateReference($audioReferencePath)}
-            $script:recordingProbe=$probe;Save-CurrentSession
+            $script:recordingProbe=$probe
+            [void](Add-TimelineEvent $script:session 'CaptureRequested' $testId $probe.id)
+            Save-CurrentSession
             if($probe.sourceKind -eq 'Microphone'){$script:audioRecorder=[AudioNoiseDiagnostics.AudioProbe]::StartMicrophone($audioInput.SelectedItem.Id,$audioOutput.SelectedItem.Id,$audioCapturePath,$audioReferencePath,$probe.maximumSeconds)}
             else{$script:audioRecorder=[AudioNoiseDiagnostics.AudioProbe]::Start($audioOutput.SelectedItem.Id,$audioCapturePath,$audioReferencePath,$probe.maximumSeconds)}
             Update-UiState

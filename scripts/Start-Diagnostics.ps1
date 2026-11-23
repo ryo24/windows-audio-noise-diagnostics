@@ -1,8 +1,9 @@
-﻿param([switch]$SmokeTest, [string]$ScreenshotPath, [switch]$ExerciseWorkflow, [switch]$ExerciseAudioWorkflow, [switch]$ExercisePhoneWorkflow, [ValidateSet('Tests','Bluetooth','Audio','Phone')][string]$ScreenshotTab='Tests')
+﻿param([switch]$SmokeTest, [string]$ScreenshotPath, [switch]$ExerciseWorkflow, [switch]$ExerciseAudioWorkflow, [switch]$ExercisePhoneWorkflow, [switch]$ExerciseExportWorkflow, [ValidateSet('Tests','Bluetooth','Audio','Phone','Evidence')][string]$ScreenshotTab='Tests')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Core.ps1')
 . (Join-Path $PSScriptRoot 'Inventory.ps1')
 . (Join-Path $PSScriptRoot 'AudioUi.ps1')
+. (Join-Path $PSScriptRoot 'EvidenceUi.ps1')
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [Windows.Forms.Application]::EnableVisualStyles()
@@ -20,6 +21,7 @@ $script:worker=$null
 $script:workerHandle=$null
 $script:workerMode=$null
 $script:closing=$false
+$script:traceProcess=$null
 $script:bluetoothMonitor=$null
 $script:bluetoothTest=$null
 $script:btConditions=@('Unknown','RadioOff','RadioOnKeyboardOff','KeyboardConnected')
@@ -48,7 +50,7 @@ function New-UiCombo {
 }
 function Show-UiError {
     param($Failure)
-    if($SmokeTest){Write-Host ('UI validation error: '+$Failure+"`n"+$global:Error[0].ScriptStackTrace)}
+    if($SmokeTest){throw ('UI validation error: '+$Failure+"`n"+$global:Error[0].ScriptStackTrace)}
     [Windows.Forms.MessageBox]::Show([string]$Failure,'処理を完了できません',[Windows.Forms.MessageBoxButtons]::OK,[Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
 }
 function Get-CurrentProfile {
@@ -71,15 +73,20 @@ function Save-CurrentSession {
 function Update-UiState {
     $busy=($null -ne $script:worker -or $null -ne $script:bluetoothMonitor -or $script:audioRecorder -or $script:audioPlayback)
     $running=$null -ne $script:activeTest
-    $collect.Enabled=(-not $busy -and -not $running)
-    $resume.Enabled=(-not $busy -and -not $running)
+    $collect.Enabled=(-not $busy -and -not $running -and -not $script:traceProcess)
+    $resume.Enabled=$collect.Enabled
     $start.Enabled=($null -ne $script:session -and -not $busy -and -not $running)
     $skip.Enabled=$start.Enabled
     $mark.Enabled=($running -or [bool]$script:audioRecorder)
-    $finish.Enabled=($running -and -not $script:audioRecorder -and -not $script:audioPlayback)
+    $finish.Enabled=($running -and -not $script:audioRecorder -and -not $script:audioPlayback -and -not $script:worker)
     foreach ($control in @($testChoice,$outputChoice,$powerChoice,$appName,$changeText,$notes,$reference,$speaker,$profilePower,$cStates,$observations,$btCondition,$inputActivity,$btSampling)) { $control.Enabled=(-not $busy -and -not $running) }
     $report.Enabled=($null -ne $script:session)
     $folder.Enabled=($null -ne $script:session)
+    $export.Enabled=($script:session -and -not $busy -and -not $running -and -not $script:phoneReceiver -and -not $script:traceProcess)
+    $includeTraces.Enabled=$export.Enabled
+    foreach($control in @($material,$applicationOutput,$volume,$enhancements,$recentActions)){$control.Enabled=(-not $running -and -not $busy)}
+    $traceStart.Enabled=($script:session -and $traceConsent.Checked -and -not $script:traceProcess -and -not $script:worker)
+    $traceStop.Enabled=[bool]$script:traceProcess
     Update-AudioUi
     Update-PhoneUi
 }
@@ -103,7 +110,7 @@ function Receive-BluetoothSamples {
         $changed=$true; Update-UiState
     }
     if ($changed) {
-        if ($script:activeTest) { $script:activeTest.durationSeconds=[int]([DateTime]::UtcNow - [DateTime]::Parse($script:activeTest.startedUtc).ToUniversalTime()).TotalSeconds }
+        if ($script:activeTest) { Update-TestDuration $script:activeTest }
         Save-CurrentSession
     }
     if ($script:closing -and -not $script:bluetoothMonitor -and -not $script:worker) { $form.Close() }
@@ -118,6 +125,7 @@ function Start-CollectionWorker {
         . $CorePath
         . $InventoryPath
         if ($Mode -eq 'inventory') { Get-DiagnosticInventory $Salt }
+        elseif($Mode -eq 'context'){Get-ReproductionContext $Salt}
         else { Get-TestEvidence -Start $StartUtc -End $EndUtc -Salt $Salt -IncludeDrivers:$CaptureDrivers }
     }).AddArgument((Join-Path $PSScriptRoot 'Core.ps1')).AddArgument((Join-Path $PSScriptRoot 'Inventory.ps1')).AddArgument($Mode).AddArgument($script:session.id).AddArgument($StartUtc).AddArgument($EndUtc).AddArgument(($Mode -eq 'events' -and $script:eventsTest.kind -eq 'driver'))
     $script:workerHandle=$script:worker.BeginInvoke()
@@ -177,7 +185,9 @@ $layout.Controls.Add($profileGrid,0,2)
 
 $actions=New-Object Windows.Forms.FlowLayoutPanel; $actions.Dock='Fill'
 $collect=New-UiButton 'PC情報を収集・新規調査'; $resume=New-UiButton '記録を再開'; $report=New-UiButton '報告書を開く'; $folder=New-UiButton '保存先を開く'
-$actions.Controls.AddRange([Windows.Forms.Control[]]@($collect,$resume,$report,$folder)); $layout.Controls.Add($actions,0,3)
+$export=New-UiButton 'データを書き出す'
+$includeTraces=New-Object Windows.Forms.CheckBox;$includeTraces.Text='詳細ETLも含める';$includeTraces.AutoSize=$true;$includeTraces.Margin=New-Object Windows.Forms.Padding(6,13,0,0)
+$actions.Controls.AddRange([Windows.Forms.Control[]]@($collect,$resume,$report,$folder,$export,$includeTraces)); $layout.Controls.Add($actions,0,3)
 
 $tabs=New-Object Windows.Forms.TabControl; $tabs.Dock='Fill'
 $testTab=New-Object Windows.Forms.TabPage; $testTab.Text='比較テスト'; $testTab.Padding=New-Object Windows.Forms.Padding(8)
@@ -201,6 +211,7 @@ $btGrid.Controls.Add($btStatus,0,4); $btGrid.SetColumnSpan($btStatus,2); $btTab.
 $tabs.TabPages.AddRange([Windows.Forms.TabPage[]]@($testTab,$btTab,$historyTab)); $layout.Controls.Add($tabs,0,4)
 $audioTab=New-AudioCaptureTab;[void]$tabs.TabPages.Add($audioTab)
 $phoneTab=New-PhoneCaptureTab;[void]$tabs.TabPages.Add($phoneTab)
+$evidenceTab=New-EvidenceTab;[void]$tabs.TabPages.Add($evidenceTab)
 $tabs.Add_SelectedIndexChanged({if($tabs.SelectedTab -eq $audioTab -and $audioOutput.Items.Count -eq 0){Refresh-AudioOutputs}})
 $testGrid=New-Object Windows.Forms.TableLayoutPanel; $testGrid.Dock='Fill'; $testGrid.ColumnCount=2; $testGrid.RowCount=7
 [void]$testGrid.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Absolute',175)))
@@ -265,6 +276,7 @@ $resume.Add_Click({
             foreach ($test in @($loaded.tests | Where-Object { $_.result -eq 'InProgress' })) { $test.result='Interrupted'; $test.endedUtc=$loaded.updatedUtc; $test.notes += ' / 前回の保存以降は観察時間不明のため中断として再開。' }
             Import-SessionAudio $loaded (Split-Path -Parent $dialog.FileName) $script:sessionDirectory
             Import-PhysicalFiles $loaded (Split-Path -Parent $dialog.FileName) $script:sessionDirectory
+            Import-SessionTraces (Split-Path -Parent $dialog.FileName) $script:sessionDirectory
             foreach($probe in @($loaded.audioProbes | Where-Object {$_.status -in @('Starting','Recording')})){$probe.status='Interrupted';$probe.verification.reviewPlaybackCompleted=$false;$probe.verification.notes+=' 録音が中断され、WAVが未確定の可能性があります。'}
             $script:session=$loaded
             Set-ProfileControls $loaded.profile
@@ -282,13 +294,17 @@ $start.Add_Click({
         Write-AtomicText $profilePath ($script:session.profile | ConvertTo-Json -Depth 8)
         $test=New-TestRecord $script:definitions[$testChoice.SelectedIndex].id ([string]$outputChoice.SelectedItem) ([string]$powerChoice.SelectedItem) $appName.Text $changeText.Text $notes.Text $reference.Text.Trim()
         $test.defaultEndpoint=Invoke-CollectionSection { Get-DefaultEndpoint }
+        $test.conditions=Get-ManualPlaybackConditions
+        $test.playbackSnapshots=@(Invoke-CollectionSection {Get-PlaybackSnapshot $script:session.id})
         $test.bluetoothCondition=$script:btConditions[$btCondition.SelectedIndex]; $test.inputActivity=$script:inputActivities[$inputActivity.SelectedIndex]
         $test.bluetoothSampling=[pscustomobject]@{ enabled=$btSampling.Checked; intervalSeconds=10; maxSamples=if ($btSampling.Checked) {720} else {1}; limitReached=$false; endedUtc=$null; errorType=$null }
         $script:session.tests=@($script:session.tests) + @($test)
         $script:activeTest=$test
+        [void](Add-TimelineEvent $script:session 'TestStarted' $test.id)
         Save-CurrentSession
         $script:bluetoothTest=$test
         $script:bluetoothMonitor=Start-BluetoothMonitor -Salt $script:session.id -InventoryPath (Join-Path $PSScriptRoot 'Inventory.ps1') -MaxSamples $test.bluetoothSampling.maxSamples
+        $script:contextTest=$test;Start-CollectionWorker 'context'
         $status.Text='再生してノイズを確認してください。10分を目安に観察し、ノイズが聞こえたらボタンを押します。'
         Update-UiState
     } catch { Show-UiError $_.Exception.Message }
@@ -296,8 +312,12 @@ $start.Add_Click({
 $mark.Add_Click({
     if ($script:activeTest -or $script:audioRecorder) {
         try {
-            $timestamp=[DateTime]::UtcNow.ToString('o')
-            if($script:activeTest){$script:activeTest.noiseUtc=@($script:activeTest.noiseUtc)+@($timestamp);$script:activeTest.durationSeconds=[int]([DateTime]::UtcNow - [DateTime]::Parse($script:activeTest.startedUtc).ToUniversalTime()).TotalSeconds}
+            $noiseProbeId=if($script:audioRecorder -and -not $script:audioRecorder.Finished){$script:recordingProbe.id}else{''}
+            $event=Add-TimelineEvent $script:session 'NoiseHeard' $script:activeTest.id $noiseProbeId
+            $timestamp=$event.utc
+            if($script:activeTest){$script:activeTest.noiseUtc=@($script:activeTest.noiseUtc)+@($timestamp);Update-TestDuration $script:activeTest
+                if(@($script:activeTest.noiseUtc).Count -eq 1){$script:activeTest.playbackSnapshots+=@(Invoke-CollectionSection {Get-PlaybackSnapshot $script:session.id})}
+            }
             if($script:audioRecorder -and -not $script:audioRecorder.Finished){$script:recordingProbe.noiseMarkersUtc=@($script:recordingProbe.noiseMarkersUtc)+@($timestamp);$script:recordingProbe.verification.liveNoise='Yes'}
             Save-CurrentSession
         } catch { Show-UiError $_.Exception.Message }
@@ -306,8 +326,9 @@ $mark.Add_Click({
 $finish.Add_Click({
     try {
         $test=$script:activeTest
-        $test.endedUtc=[DateTime]::UtcNow.ToString('o')
-        $test.durationSeconds=[int]([DateTime]::UtcNow - [DateTime]::Parse($test.startedUtc).ToUniversalTime()).TotalSeconds
+        Complete-TestTiming $test
+        [void](Add-TimelineEvent $script:session 'ObservationEnded' $test.id)
+        $test.playbackSnapshots+=@(Invoke-CollectionSection {Get-PlaybackSnapshot $script:session.id})
         # Result selection is enabled at finish; it describes the whole completed observation.
         $answerForm=New-Object Windows.Forms.Form; $answerForm.Text='テスト結果'; $answerForm.Size=New-Object Drawing.Size(600,380); $answerForm.StartPosition='CenterParent'; $answerForm.Font=$form.Font
         $answer=New-UiCombo @('再現せず','改善','変化なし','悪化'); $answer.Dock='Top'
@@ -327,7 +348,7 @@ $finish.Add_Click({
             Save-CurrentSession
             $script:eventsTest=$test
             Start-CollectionWorker 'events' ([DateTime]::Parse($test.startedUtc).ToUniversalTime()) ([DateTime]::Parse($test.endedUtc).ToUniversalTime())
-        } else { $test.endedUtc=$null }
+        } else { $test.endedUtc=$null;$test.timing.end=$null;$test.timing.wallSeconds=$null;$test.timing.clockDifferenceSeconds=$null;[void](Add-TimelineEvent $script:session 'ObservationResumedAfterDialog' $test.id) }
         $answerForm.Dispose()
     } catch { Show-UiError $_.Exception.Message; Update-UiState }
 })
@@ -342,15 +363,24 @@ $skip.Add_Click({
 })
 $report.Add_Click({ try { Save-CurrentSession; Start-Process -FilePath (Join-Path $script:sessionDirectory 'report.html') } catch { Show-UiError $_.Exception.Message } })
 $folder.Add_Click({ try { Start-Process explorer.exe -ArgumentList ('"' + $script:sessionDirectory + '"') } catch { Show-UiError $_.Exception.Message } })
+$export.Add_Click({try{
+    Save-CurrentSession
+    $archive=Export-DiagnosticBundle $script:sessionDirectory (Join-Path $script:dataRoot 'exports') -IncludeTraces:$includeTraces.Checked
+    $status.Text='ZIPを書き出しました: '+[IO.Path]::GetFileName($archive)
+    if(-not $SmokeTest){Start-Process explorer.exe -ArgumentList ('/select,"'+$archive+'"')}
+    $script:lastExport=$archive
+}catch{Show-UiError $_.Exception.Message}})
 
 $timer=New-Object Windows.Forms.Timer; $timer.Interval=500
 $timer.Add_Tick({
+    Poll-DetailedTrace
     try{Poll-PhoneReceiver}catch{$status.Text='スマートフォン記録の保存に失敗しました。';Show-UiError $_.Exception.Message}
     try{Poll-AudioJobs}catch{$status.Text='音声記録の保存に失敗しました。';Show-UiError $_.Exception.Message}
     if($script:closing -and -not $script:audioRecorder -and -not $script:audioPlayback -and -not $script:worker -and -not $script:bluetoothMonitor){$form.Close();return}
     try { Receive-BluetoothSamples } catch { $status.Text='Bluetooth記録の保存に失敗しました。'; Show-UiError $_.Exception.Message }
     if ($script:activeTest) {
-        $seconds=[int]([DateTime]::UtcNow - [DateTime]::Parse($script:activeTest.startedUtc).ToUniversalTime()).TotalSeconds
+        Update-TestDuration $script:activeTest
+        $seconds=[int]$script:activeTest.durationSeconds
         $elapsed.Text=('{0:00}:{1:00} / ノイズ {2} 回' -f [int][Math]::Floor($seconds/60),($seconds%60),@($script:activeTest.noiseUtc).Count)
         if ($seconds -ge 600) { $status.Text='10分経過しました。観察を続けるか「テスト終了」で結果を記録してください。' }
     }
@@ -359,6 +389,7 @@ $timer.Add_Tick({
             $value=@($script:worker.EndInvoke($script:workerHandle))
             if ($script:worker.HadErrors -or $value.Count -ne 1) { throw '情報取得の一部を完了できませんでした。すでに保存した記録は保持しています。' }
             if ($script:workerMode -eq 'inventory') { $script:session.inventory=$value[0] }
+            elseif($script:workerMode -eq 'context'){$script:contextTest.context=$value[0]}
             else {
                 $script:eventsTest | Add-Member -NotePropertyName relatedEvents -NotePropertyValue $value[0].relatedEvents -Force
                 $script:eventsTest | Add-Member -NotePropertyName bluetoothEndState -NotePropertyValue $value[0].bluetoothEndState -Force
@@ -372,13 +403,14 @@ $timer.Add_Tick({
 })
 $form.Add_FormClosing({
     param($sender,$eventArgs)
+    if($script:traceProcess){Request-TraceStop;$eventArgs.Cancel=$true;$status.Text='詳細トレースを保存しています。終了してから閉じてください。';return}
     if($script:phoneReceiver){try{Stop-PhoneReceiver}catch{Show-UiError $_.Exception.Message;$eventArgs.Cancel=$true;return}}
     if($script:audioRecorder -or $script:audioPlayback){if($script:audioRecorder){$script:audioRecorder.Stop()};if($script:audioPlayback){$script:audioPlayback.Stop()};if($script:bluetoothMonitor){[void]$script:bluetoothMonitor.cancel.Set()};$script:closing=$true;$eventArgs.Cancel=$true;$status.Text='音声ファイルを確定してから閉じます。';return}
-    if ($script:worker) { $eventArgs.Cancel=$true; [Windows.Forms.MessageBox]::Show('情報の取得中です。取得が終わってから閉じてください。','取得中') | Out-Null; return }
+    if ($script:worker) { $eventArgs.Cancel=$true; if(-not $SmokeTest){[Windows.Forms.MessageBox]::Show('情報の取得中です。取得が終わってから閉じてください。','取得中') | Out-Null}; return }
     if ($script:activeTest) {
         try {
-            $script:activeTest.result='Interrupted'; $script:activeTest.endedUtc=[DateTime]::UtcNow.ToString('o')
-            $script:activeTest.durationSeconds=[int]([DateTime]::UtcNow - [DateTime]::Parse($script:activeTest.startedUtc).ToUniversalTime()).TotalSeconds
+            $script:activeTest.result='Interrupted';Complete-TestTiming $script:activeTest
+            [void](Add-TimelineEvent $script:session 'TestInterrupted' $script:activeTest.id)
             Save-CurrentSession
             $script:activeTest=$null
         } catch { $eventArgs.Cancel=$true; Show-UiError $_.Exception.Message }
@@ -393,14 +425,20 @@ try {
     Update-UiState
     if ($SmokeTest) {
         $form.Show(); $form.PerformLayout(); [Windows.Forms.Application]::DoEvents()
-        if ($ExerciseWorkflow -or $ExerciseAudioWorkflow -or $ExercisePhoneWorkflow) {
+        if ($ExerciseWorkflow -or $ExerciseAudioWorkflow -or $ExercisePhoneWorkflow -or $ExerciseExportWorkflow) {
             $speaker.Text='Local UI verification'; $cStates.SelectedIndex=1
             $collect.PerformClick()
             $timer.Start()
             $deadline=[DateTime]::UtcNow.AddSeconds(120)
             while (($script:worker -or $script:bluetoothMonitor) -and [DateTime]::UtcNow -lt $deadline) { [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
             if ($script:worker -or -not $script:session.inventory -or -not $start.Enabled) { throw 'The UI inventory workflow did not complete.' }
-            if($ExercisePhoneWorkflow){
+            if($ExerciseExportWorkflow){
+                $export.PerformClick()
+                if(-not $script:lastExport -or -not (Test-Path -LiteralPath $script:lastExport)){throw 'The UI did not export a ZIP.'}
+                $verified=Test-DiagnosticBundle $script:lastExport
+                if($verified.manifest.sessionId -ne $script:session.id){throw 'The ZIP does not match the selected session.'}
+                Write-Output 'UI export creates and verifies a complete session bundle OK'
+            }elseif($ExercisePhoneWorkflow){
                 $tabs.SelectedTab=$phoneTab
                 [void]$phoneAddress.Items.Add('127.0.0.1');$phoneAddress.SelectedIndex=0;Update-UiState;$phoneStart.PerformClick()
                 if(-not $script:phoneReceiver){throw 'The UI did not start the local receiver.'}
@@ -428,6 +466,8 @@ try {
                 $audioNoise.PerformClick()
                 while($script:audioRecorder -and [DateTime]::UtcNow -lt $deadline){[Windows.Forms.Application]::DoEvents();Start-Sleep -Milliseconds 50}
                 if($script:audioRecorder -or $script:session.audioProbes[0].status -ne 'Completed'){throw 'UI loopback recording failed.'}
+                $deadline=[DateTime]::UtcNow.AddSeconds(60)
+                while($script:worker -and [DateTime]::UtcNow -lt $deadline){[Windows.Forms.Application]::DoEvents();Start-Sleep -Milliseconds 50}
                 $finish.PerformClick()
                 $deadline=[DateTime]::UtcNow.AddSeconds(45)
                 while(($script:worker -or $script:bluetoothMonitor) -and [DateTime]::UtcNow -lt $deadline){[Windows.Forms.Application]::DoEvents();Start-Sleep -Milliseconds 50}
@@ -440,10 +480,10 @@ try {
                 $saved=Read-Session (Join-Path $script:sessionDirectory 'session.json')
                 if($saved.audioProbes[0].verification.replayNoise -ne 'No' -or $saved.audioProbes[0].noiseMarkersUtc.Count -ne 1){throw 'UI audio verification was not saved.'}
                 $start.PerformClick();$audioMode.SelectedIndex=1;$audioStart.PerformClick();$form.Close()
-                $deadline=[DateTime]::UtcNow.AddSeconds(15)
-                while(($script:audioRecorder -or $script:bluetoothMonitor) -and [DateTime]::UtcNow -lt $deadline){[Windows.Forms.Application]::DoEvents();Start-Sleep -Milliseconds 50}
+                $deadline=[DateTime]::UtcNow.AddSeconds(90)
+                while(($script:audioRecorder -or $script:bluetoothMonitor -or $script:worker -or -not $form.IsDisposed) -and [DateTime]::UtcNow -lt $deadline){[Windows.Forms.Application]::DoEvents();Start-Sleep -Milliseconds 50}
                 $saved=Read-Session (Join-Path $script:sessionDirectory 'session.json')
-                if($script:audioRecorder -or $script:bluetoothMonitor -or $saved.audioProbes.Count -ne 2 -or $saved.audioProbes[1].status -in @('Starting','Recording') -or $saved.tests[1].result -ne 'Interrupted'){throw 'Closing during recording did not finalize the WAV and comparison.'}
+                if($script:audioRecorder -or $script:bluetoothMonitor -or $saved.audioProbes.Count -ne 2 -or $saved.audioProbes[1].status -in @('Starting','Recording') -or $saved.tests[1].result -ne 'Interrupted'){throw ('Closing during recording did not finalize the WAV and comparison. recording='+[bool]$script:audioRecorder+' monitoring='+[bool]$script:bluetoothMonitor+' worker='+[bool]$script:worker+' closing='+$script:closing+' disposed='+$form.IsDisposed+' result='+$saved.tests[1].result)}
                 Write-Output 'UI reference playback, loopback recording, marker, WAV replay, verification and close/finalization OK'
             }else{
             $testChoice.SelectedIndex=7
@@ -453,11 +493,15 @@ try {
             if (@($script:activeTest.bluetoothSamples).Count -eq 0) { throw 'No Bluetooth sample arrived in the UI.' }
             $mark.PerformClick()
             if (@($script:activeTest.noiseUtc).Count -ne 1) { throw 'The UI did not save the marker.' }
+            $deadline=[DateTime]::UtcNow.AddSeconds(60)
+            while($script:worker -and [DateTime]::UtcNow -lt $deadline){[Windows.Forms.Application]::DoEvents();Start-Sleep -Milliseconds 50}
             $finish.PerformClick()
             $deadline=[DateTime]::UtcNow.AddSeconds(45)
             while (($script:worker -or $script:bluetoothMonitor) -and [DateTime]::UtcNow -lt $deadline) { [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
             if ($script:worker -or $script:session.tests[0].result -ne 'Unchanged' -or -not $script:session.tests[0].relatedEvents -or -not $script:session.tests[0].driverSnapshot -or -not $script:session.tests[0].bluetoothEndState) { throw 'The UI did not complete the test and collect events/drivers/Bluetooth.' }
             $start.PerformClick(); $mark.PerformClick()
+            $deadline=[DateTime]::UtcNow.AddSeconds(60)
+            while($script:worker -and [DateTime]::UtcNow -lt $deadline){[Windows.Forms.Application]::DoEvents();Start-Sleep -Milliseconds 50}
             $form.Close()
             $deadline=[DateTime]::UtcNow.AddSeconds(30)
             while ($script:bluetoothMonitor -and [DateTime]::UtcNow -lt $deadline) { [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
@@ -470,6 +514,7 @@ try {
             if ($ScreenshotTab -eq 'Bluetooth') { $tabs.SelectedTab=$btTab; [Windows.Forms.Application]::DoEvents() }
             if ($ScreenshotTab -eq 'Audio') { $tabs.SelectedTab=$audioTab; [Windows.Forms.Application]::DoEvents() }
             if ($ScreenshotTab -eq 'Phone') { $tabs.SelectedTab=$phoneTab; [Windows.Forms.Application]::DoEvents() }
+            if ($ScreenshotTab -eq 'Evidence') { $tabs.SelectedTab=$evidenceTab; [Windows.Forms.Application]::DoEvents() }
             [IO.Directory]::CreateDirectory((Split-Path -Parent ([IO.Path]::GetFullPath($ScreenshotPath)))) | Out-Null
             $bitmap=New-Object Drawing.Bitmap($form.Width,$form.Height)
             $form.DrawToBitmap($bitmap,(New-Object Drawing.Rectangle(0,0,$form.Width,$form.Height)))

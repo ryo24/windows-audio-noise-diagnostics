@@ -33,6 +33,7 @@ function Write-AtomicText {
 
 function Read-Session {
     param([string]$Path)
+    if((Get-Item -LiteralPath $Path).Length -gt 32MB){throw '調査ログが32MBを超えています。原本は変更していません。'}
     $session = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($session.schemaVersion -ne $script:SchemaVersion) { throw 'このログ形式には対応していません。原本は変更していません。対応する版のツールを利用してください。' }
     if (-not $session.id -or -not $session.tool -or $null -eq $session.tests -or -not $session.profile) { throw 'ログの必須項目が不足しています。原本は変更していません。' }
@@ -52,6 +53,7 @@ function New-DiagnosticSession {
         tests = @()
         audioProbes = @()
         physicalRecordings = @()
+        timeline = @()
     }
 }
 
@@ -76,11 +78,13 @@ function Get-TestDefinitions {
 
 function New-TestRecord {
     param([string]$Kind, [string]$Output, [string]$Power, [string]$App, [string]$Change, [string]$Notes, [string]$Reference = '')
+    $point=Get-ClockPoint
     [pscustomobject]@{
-        id=[guid]::NewGuid().ToString('N'); kind=$Kind; startedUtc=[DateTime]::UtcNow.ToString('o'); endedUtc=$null
+        id=[guid]::NewGuid().ToString('N'); kind=$Kind; startedUtc=$point.utc; endedUtc=$null
         tool=Get-ToolIdentity; output=$Output; power=$Power; app=$App; change=$Change; notes=$Notes
         referenceTestId=$Reference; result='InProgress'; noiseUtc=@(); durationSeconds=0; defaultEndpoint=$null
         bluetoothCondition='Unknown'; inputActivity='Unknown'; bluetoothSamples=@(); bluetoothSampling=$null
+        timing=[pscustomobject]@{start=$point;end=$null;wallSeconds=$null;clockDifferenceSeconds=$null};conditions=$null;context=$null;playbackSnapshots=@()
     }
 }
 
@@ -235,6 +239,7 @@ function Get-ReportHtml {
     $bluetoothHtml=Get-BluetoothReportHtml $Session
     $audioHtml=Get-AudioReportHtml $Session
     $physicalHtml=Get-PhysicalReportHtml $Session
+    $reproductionHtml=Get-ReproductionReportHtml $Session
     $driverEvidenceHtml=(@($Session.tests | Where-Object { $null -ne $_.driverSnapshot } | ForEach-Object {
         '<details><summary>ドライバー変更テストの再取得情報: ' + (ConvertTo-HtmlText $_.id) + '</summary><pre>' + (ConvertTo-HtmlText ($_.driverSnapshot | ConvertTo-Json -Depth 14)) + '</pre></details>'
     })) -join "`n"
@@ -259,8 +264,9 @@ function Get-ReportHtml {
 $bluetoothHtml
 $audioHtml
 $physicalHtml
+$reproductionHtml
 <h2>利用者が確認した情報</h2><pre>$profileJson</pre>
-<h2>自動取得した情報</h2><p>最初の情報はcapturedUtc時点の状態です。ドライバー変更テストでは終了時に音声デバイス情報を再取得し、別に保存します。</p><details><summary>初回取得のPC・ドライバー・関連イベントを開く</summary><pre>$inventoryJson</pre></details>$driverEvidenceHtml
+<h2>自動取得した情報</h2><p>最初の情報はcapturedUtc時点の状態です。v0.6以降は各テスト開始後にも構成を取得します。ドライバー変更テストでは終了後にも再取得します。</p><details><summary>初回取得のPC・ドライバー・関連イベントを開く</summary><pre>$inventoryJson</pre></details>$driverEvidenceHtml
 <h2>情報源と適用範囲</h2><article><ul>
 <li><a href="https://support.microsoft.com/en-us/windows/hardware/audio/fix-distorted-or-crackling-audio-in-windows">Microsoft公式の音声対処手順</a>：音声拡張、形式、ドライバーの確認。</li>
 <li><a href="https://learn.microsoft.com/en-us/windows-hardware/test/assessments/results-for-the-streaming-media-performance-assessment">Microsoftの音声グリッチ解析資料</a>：DPC/ISRなどの詳細解析が必要になる場合の参考。</li>
@@ -297,5 +303,14 @@ function Save-Session {
         }
     }
     Write-AtomicText (Join-Path $Directory 'bluetooth.csv') ($bluetoothLines -join "`r`n") -Bom
-    Write-AtomicText (Join-Path $Directory 'report.html') (Get-ReportHtml $Session)
+    $timelineLines=New-Object 'System.Collections.Generic.List[string]'
+    $timelineLines.Add('event_id,kind,test_id,probe_id,utc,qpc,qpc_frequency,note')
+    foreach($entry in @($Session.timeline)){
+        if($null -eq $entry){continue}
+        $timelineLines.Add((@($entry.id,$entry.kind,$entry.testId,$entry.probeId,$entry.utc,$entry.qpc,$entry.frequency,$entry.note)|ForEach-Object{ConvertTo-SafeCsvCell $_}) -join ',')
+    }
+    Write-AtomicText (Join-Path $Directory 'timeline.csv') ($timelineLines -join "`r`n") -Bom
+    $html=Get-ReportHtml $Session
+    $html=$html.Replace('</main>',((Get-TraceReportHtml $Directory)+'</main>'))
+    Write-AtomicText (Join-Path $Directory 'report.html') $html
 }

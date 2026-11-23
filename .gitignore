@@ -1,4 +1,13 @@
 /data/
+/external-results/*
+!/external-results/.gitkeep
+!/external-results/README.md
+!/external-results/inbox/
+!/external-results/cases/
+/external-results/inbox/*
+!/external-results/inbox/.gitkeep
+/external-results/cases/*
+!/external-results/cases/.gitkeep
 /test-output/
 /artifacts/
 *.tmp

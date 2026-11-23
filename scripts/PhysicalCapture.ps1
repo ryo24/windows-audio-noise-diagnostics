@@ -30,6 +30,7 @@ function Add-PhysicalMedia {
     $testId=if($script:activeTest){$script:activeTest.id}else{''}
     $record=ConvertTo-PhysicalRecord $Media $probeId $testId
     $script:session.physicalRecordings=@($script:session.physicalRecordings)+@($record)
+    [void](Add-TimelineEvent $script:session 'PhysicalFileImported' $testId $probeId ('physicalId='+$record.id+'; not a recording-start time'))
     Save-CurrentSession;Refresh-PhysicalRecords
 }
 function Get-LocalCaptureAddresses {

@@ -2,6 +2,9 @@
 
 . (Join-Path $PSScriptRoot 'AudioCapture.ps1')
 . (Join-Path $PSScriptRoot 'PhysicalCapture.ps1')
+. (Join-Path $PSScriptRoot 'Reproduction.ps1')
+. (Join-Path $PSScriptRoot 'Bundles.ps1')
+. (Join-Path $PSScriptRoot 'Trace.ps1')
 
 function Invoke-CollectionSection {
     param([scriptblock]$Read)

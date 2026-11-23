@@ -1,6 +1,6 @@
 ﻿function Initialize-AudioInterop {
     if (-not ('AudioNoiseDiagnostics.AudioProbe' -as [type])) {
-        Add-Type -Path @((Join-Path $PSScriptRoot 'AudioEndpoint.cs'),(Join-Path $PSScriptRoot 'AudioProbe.cs')) -ErrorAction Stop
+        Add-Type -Path @((Join-Path $PSScriptRoot 'AudioEndpoint.cs'),(Join-Path $PSScriptRoot 'AudioProbe.cs'),(Join-Path $PSScriptRoot 'PlaybackEvidence.cs')) -ErrorAction Stop
     }
 }
 
@@ -32,6 +32,7 @@ function Complete-AudioProbeRecord {
     $Record.status=$Recorder.Status
     $Record.capture=[pscustomobject]@{
         startedUtc=$Recorder.StartedUtc;endedUtc=$Recorder.EndedUtc;elapsedSeconds=$Recorder.ElapsedSeconds
+        startedQpc=$Recorder.StartedQpc;endedQpc=$Recorder.EndedQpc;qpcFrequency=$Recorder.QpcFrequency
         sampleRate=$Recorder.SampleRate;channels=$Recorder.Channels;containerBits=$Recorder.Bits
         capturedFrames=$Recorder.CapturedFrames;writtenFrames=$Recorder.WrittenFrames;insertedSilenceFrames=$Recorder.InsertedSilenceFrames
         packetCount=$Recorder.PacketCount;discontinuities=$Recorder.Discontinuities;timestampErrors=$Recorder.TimestampErrors;packetFlags=@($Recorder.FlagEvents)

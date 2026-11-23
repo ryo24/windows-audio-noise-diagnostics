@@ -172,6 +172,7 @@ namespace AudioNoiseDiagnostics {
         volatile bool stop; public volatile bool Finished; public volatile string Status="Starting";
         public string ErrorCode; public string StartedUtc,EndedUtc; public int SampleRate,Channels,Bits;
         public long CapturedFrames,WrittenFrames,InsertedSilenceFrames,PacketCount,Discontinuities,TimestampErrors;
+        public long StartedQpc,EndedQpc; public long QpcFrequency=Stopwatch.Frequency;
         public double ElapsedSeconds,ReferenceStartOffsetSeconds; public bool SizeLimitReached;
         readonly List<PacketFlag> flags=new List<PacketFlag>();
         public PacketFlag[] FlagEvents { get { lock(flags) { return flags.ToArray(); } } }
@@ -194,7 +195,7 @@ namespace AudioNoiseDiagnostics {
                 Guid session=Guid.Empty; Marshal.ThrowExceptionForHR(client.Initialize(0,loopback?0x20000u:0u,1000000,0,pointer,ref session));
                 object service;Guid iid=typeof(ICaptureClient).GUID;Marshal.ThrowExceptionForHR(client.GetService(ref iid,out service));capture=(ICaptureClient)service;
                 sink=new WaveSink(path,mix); Marshal.ThrowExceptionForHR(client.Start());
-                double startQpc=(double)Stopwatch.GetTimestamp()/Stopwatch.Frequency;
+                StartedQpc=Stopwatch.GetTimestamp();double startQpc=(double)StartedQpc/Stopwatch.Frequency;
                 StartedUtc=DateTime.UtcNow.ToString("o");clock.Start();Status="Recording";
                 if (!String.IsNullOrEmpty(reference)) { ReferenceStartOffsetSeconds=clock.Elapsed.TotalSeconds; renderer=new WaveRenderer(renderEndpointId,reference,true); }
                 long maximumFrames=268435456/mix.Align;
@@ -234,7 +235,7 @@ namespace AudioNoiseDiagnostics {
                 if(sink!=null) { try {sink.Dispose();} catch(Exception e) { ErrorCode="0x"+e.HResult.ToString("X8");Status="Failed"; } }
                 if(pointer!=IntPtr.Zero) Marshal.FreeCoTaskMem(pointer);
                 NativeAudio.Release(capture);NativeAudio.Release(client);NativeAudio.Release(device);NativeAudio.Release(enumerator);
-                clock.Stop();ElapsedSeconds=clock.Elapsed.TotalSeconds;EndedUtc=DateTime.UtcNow.ToString("o");Finished=true;
+                clock.Stop();ElapsedSeconds=clock.Elapsed.TotalSeconds;EndedUtc=DateTime.UtcNow.ToString("o");EndedQpc=Stopwatch.GetTimestamp();Finished=true;
             }
         }
     }
