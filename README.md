@@ -83,6 +83,15 @@ Bluetoothキーボードから有線へ替えてノイズが止まった場合�
 
 ## 更新する
 
+| コマンド | 動作 |
+| --- | --- |
+| `start.cmd` | 現在のフォルダーの版を起動 |
+| `update.cmd` | mainの配信版だけを更新 |
+| `start-develop.cmd` | developを取得・更新して起動 |
+| `update-develop.cmd` | developを取得・更新（起動しない） |
+
+開発版を試すときは **start-develop.cmd** をダブルクリックするか、PowerShellで`.\start-develop.cmd`を実行します。mainからは`data/develop-tool/`に別の開発版を自動で用意するため、手動のcloneやブランチ切替は不要です。以降も同じコマンドで最新developへ更新して起動できます。開発版の調査記録はそのフォルダー内の`data/`へ保存します。以前の記録は「保存した記録を再開」で元のsession.jsonを選べます。すでにdevelopを使っている場合は、そのフォルダーを更新します。変更・未追跡ファイル・履歴分岐・通信失敗があれば上書きせず停止し、更新に失敗した場合は起動しません。
+
 調査ツールを閉じて **update.cmd** をダブルクリックするか、PowerShellで実行します。
 
 ```powershell
