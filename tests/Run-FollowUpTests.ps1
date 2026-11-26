@@ -28,14 +28,14 @@ try{
     Assert-FollowUp ($coverage.overlapSeconds -eq 15 -and $coverage.recordingSeconds -eq 20 -and $coverage.usbStartAfterRecordingSeconds -eq 3) 'Partial USB coverage is measured separately from recording duration'
     & {
         . (Join-Path $root 'scripts/UsbTrace.ps1')
-        function Get-WinEvent {param($ListProvider,$ErrorAction);[pscustomobject]@{Id=[guid]::Empty;Keywords=@([pscustomobject]@{Name='Default';Value=1},[pscustomobject]@{Name='USBError';Value=2},[pscustomobject]@{Name='HeadersBusTrace';Value=64},[pscustomobject]@{Name='Rundown';Value=32768},[pscustomobject]@{Name='PartialDataBusTrace';Value=128},[pscustomobject]@{Name='FullDataBusTrace';Value=256})}}
+        function Get-WinEvent {param($ListProvider,$ErrorAction);[pscustomobject]@{Id=[guid]::Empty;Keywords=@([pscustomobject]@{Name='Default';Value=1},[pscustomobject]@{Name='USBError';Value=2},[pscustomobject]@{Name='HeadersBusTrace';Value=64},[pscustomobject]@{Name='Rundown';Value=32768},[pscustomobject]@{Name='PartialDataBusTrace';Value=128},[pscustomobject]@{Name='FullDataBusTrace';Value=256},[pscustomobject]@{Name='StateMachine';Value=512})}}
         $providers=Get-UsbTraceProviders
-        Assert-FollowUp ($providers.Count -eq 3 -and @($providers|Where-Object {$_.keywords -ne '0x8043'}).Count -eq 0) 'Provider masks are resolved from published metadata and exclude packet payload keywords'
+        Assert-FollowUp ($providers.Count -eq 3 -and @($providers|Where-Object {$_.keywords -ne '0x8243'}).Count -eq 0) 'Provider masks are resolved from published metadata and exclude packet payload keywords'
         function Get-WinEvent {param($ListProvider,$ErrorAction);[pscustomobject]@{Id=[guid]::Empty;Keywords=@()}}
         $blocked=$false;try{Get-UsbTraceProviders|Out-Null}catch{$blocked=$true}
         Assert-FollowUp $blocked 'Missing header-only keywords fail explicitly instead of enabling unrestricted USB data'
     }
-    function Get-UsbTraceProviders {@([pscustomobject]@{name='Microsoft-Windows-USB-USBXHCI';id=[guid]::Empty.ToString();keywords='0x8043';level=5})}
+    function Get-UsbTraceProviders {@([pscustomobject]@{name='Microsoft-Windows-USB-USBXHCI';id=[guid]::Empty.ToString();keywords='0x8243';level=5})}
     $session=New-DiagnosticSession ([pscustomobject]@{speakerModel='fixture';cStates='Unknown'})
     $sessionRoot=Join-Path $directory 'session';Save-Session $session $sessionRoot
     $script:usbCommands=New-Object 'System.Collections.Generic.List[object]';$script:wprCommands=0;$script:failUsbStart=$false;$script:failUsbStop=$false;$script:usbPath=$null

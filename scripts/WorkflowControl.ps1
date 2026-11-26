@@ -31,6 +31,7 @@ function Update-UiState {
     $start.Enabled=($reason -eq '' -and -not $script:closing)
     $skip.Enabled=($script:session -and -not $busy -and -not $running)
     $mark.Enabled=($running -and -not $script:finishRequested -and -not $script:closing)
+    if($script:activeTest.followUp.captureStage -in @('AwaitingTrace','StartingAudio')){$mark.Enabled=$false}
     $finish.Enabled=($running -and -not $script:finishRequested -and -not $script:closing)
     if(-not $running){$elapsed.Text='待機中（未開始）'}
     foreach($control in @($testChoice,$outputChoice,$powerChoice,$appName,$changeText,$notes,$reference,$speaker,$profilePower,$cStates,$observations,$btCondition,$inputActivity,$btSampling,$material,$applicationOutput,$volume,$enhancements,$recentActions)){$control.Enabled=(-not $busy -and -not $running)}
@@ -43,10 +44,14 @@ function Update-UiState {
     $outputName=if($audioOutput.SelectedItem){$audioOutput.SelectedItem.Name}else{'未選択'}
     $sourceName=if($audioSource.SelectedIndex -eq 1){'マイク：'+$audioInput.SelectedItem.Name}else{'Windows内部の音'}
     $runSummary.Text='今回の比較：'+$testChoice.SelectedItem+"`r`n調べ方："+$audioMode.SelectedItem+"`r`n接続の申告："+$outputChoice.SelectedItem+' ／ '+$(if($audioMode.SelectedIndex -eq 2){'音声録音なし'}else{'出力：'+$outputName+' ／ '+$sourceName+' ／ '+$audioLength.SelectedItem+'秒'})
+    $runSummary.Text+="`r`n"+$(if($followUpChoice.SelectedIndex -eq 1){'USB＋Audio取得：予定あり ／ 管理者確認あり ／ USB同意：'+$(if($followUpConsent.Checked){'済'}else{'未確認'})}else{'USB取得：未選択（ZIPのETLチェックだけでは取得しません）'})
     if($script:finishRequested){$runInstruction.Text='終了処理中です。録音と状態記録を保存した後、結果の入力画面が開きます。'}
     elseif($running){$runInstruction.Text=if($audioMode.SelectedIndex -eq 0){'共通テスト音声を再生・録音しています。ノイズが聞こえたらボタンを押してください。'}elseif($audioMode.SelectedIndex -eq 1){'問題のアプリを、選んだ出力で再生してください。録音と状態記録は開始済みです。'}else{'普段の音声を再生してください。音声は録音せず、ノイズ時刻と状態を記録しています。'}}
     elseif($reason){$runInstruction.Text=$reason}
     else{$runInstruction.Text=if($audioMode.SelectedIndex -eq 2){'準備できました。下の開始ボタンを1回押してください。録音なしでは10分を目安に観察します。'}else{'準備できました。下の開始ボタンを1回押すと、録音・観察・状態記録が同時に始まります。'}}
+    if($running -and -not $script:finishRequested -and $script:activeTest.followUp.captureStage -eq 'AwaitingTrace'){$runInstruction.Text='USB＋Audioの開始確認待ちです。管理者確認を許可してください。テスト音はまだ鳴りません。終了で中止できます。'}
+    elseif($running -and -not $script:finishRequested -and $script:activeTest.followUp.captureStage -eq 'StartingAudio'){$runInstruction.Text='USB＋Audioの開始を確認しました。テスト音と内部録音の開始を待っています。'}
+    elseif($running -and -not $script:finishRequested -and $script:activeTest.followUp.captureStage -eq 'Started'){$runInstruction.Text=if($script:traceRun.phase -eq 'Recording'){'USB＋Audioの開始を確認しました。テスト音・内部録音と同時記録中です。同じ音をスマホで録画し、ノイズ時刻を記録してください。'}else{'USB＋Audioの継続は未確認です。下の取得状態を確認してください。音とノイズ時刻の記録は保持します。'}}
     if($running -and $script:recordingProbe.testId -eq $script:activeTest.id -and $script:recordingProbe.selectedOutputFormat.status -eq 'collected'){
         $actual=$script:recordingProbe.selectedOutputFormat.data
         $runSummary.Text+="`r`n"+'選択出力の共有形式：'+$actual.SampleRate+' Hz / '+$actual.Channels+' ch / '+$actual.ContainerBits+' bit'
@@ -59,6 +64,13 @@ function Update-UiState {
     if($export.Enabled -and -not $includeTraces.Checked -and @($script:session.tests|Where-Object {$_.followUp.kind -eq 'UsbTransfer'}).Count){$exportReady.Text+=' USB調査のETLを渡す場合は「詳細ETLも含める」にチェックしてください。既定ではETLを除外します。'}
     foreach($control in @($followUpChoice,$followUpReference,$followUpRoute,$followUpFormat,$followUpConsent,$followUpOperation,$followUpState,$followUpApply,$followUpExternal,$followUpSound)){$control.Enabled=(-not $busy -and -not $running -and -not $traceBusy)}
     $followUpConsent.Enabled=($followUpConsent.Enabled -and $followUpChoice.SelectedIndex -eq 1)
+    if($running -and $script:activeTest.followUp.kind -eq 'UsbTransfer'){$runAudioStatus.Text='USB：'+$script:traceRun.state.usb.status+' ／ Audioトレース：'+$(if($script:traceRun.state.audioStatus){$script:traceRun.state.audioStatus}else{$script:traceRun.phase})+' ／ 内部録音：'+$(if($script:audioRecorder){$script:audioRecorder.Status}else{$script:recordingProbe.status})+"`r`n"+$script:tracePresentation.text}
+    $usbPreset.Enabled=($script:session -and -not $busy -and -not $running -and -not $traceBusy)
+    if($script:session){
+        $evidence=Get-SessionTraceEvidence $script:session $script:sessionDirectory
+        $traceResults.Text=Get-TraceEvidenceText $evidence;$exportTraceResults.Text=$traceResults.Text
+        if($includeTraces.Checked -and -not @($evidence|Where-Object {$_.usb.exists -or $_.audioTrace.exists}).Count){$exportReady.Text+=' 詳細ETLは選択済みですが、関連するETL実ファイルはありません。取得なし・失敗の記録として書き出せます。'}
+    }
     Update-AudioUi;Update-PhoneUi;Update-TraceUi
 }
 function Request-ObservationFinish {
@@ -68,12 +80,14 @@ function Request-ObservationFinish {
     Complete-TestTiming $script:activeTest $Point
     [void](Add-TimelineEvent $script:session 'ObservationEnded' $script:activeTest.id)
     if($script:audioRecorder){$script:audioRecorder.Stop()}
+    elseif($script:recordingProbe.testId -eq $script:activeTest.id -and $script:recordingProbe.status -eq 'AwaitingTrace'){$script:recordingProbe.status='NotStarted';$script:activeTest.followUp.captureStage='NotStarted'}
     if((Test-DetailedTraceBusy) -and $script:traceRun.state.link.testId -eq $script:activeTest.id){Request-TraceStop}
     if($script:bluetoothMonitor){[void]$script:bluetoothMonitor.cancel.Set()}
     Save-CurrentSession;Update-UiState
 }
 function Complete-ObservationFinish {
     if(-not $script:finishRequested -or $script:audioRecorder -or $script:worker -or $script:finishDialogOpen -or $script:closing){return}
+    if((Test-DetailedTraceBusy) -and $script:traceRun.state.link.testId -eq $script:activeTest.id){return}
     $script:finishDialogOpen=$true
     $test=$script:activeTest
     try {
@@ -81,7 +95,7 @@ function Complete-ObservationFinish {
         $answerForm=New-Object Windows.Forms.Form;$answerForm.Text='調査を終了しました — 結果を記録';$answerForm.Size=New-Object Drawing.Size(640,400);$answerForm.StartPosition='CenterParent';$answerForm.Font=$form.Font
         $answer=New-UiCombo @('再現せず','改善','変化なし','悪化');$answer.Dock='Top';$answer.SelectedIndex=if(@($test.noiseUtc).Count){2}else{0}
         $recordingNote=if($script:recordingProbe -and $script:recordingProbe.testId -eq $test.id){' 録音状態：'+$script:recordingProbe.status+'（取得不足・失敗は正常の証明になりません）。'}else{''}
-        if($test.followUp.kind -eq 'UsbTransfer'){$recordingNote+=' USB＋Audio状態：'+$script:traceRun.phase+'。保存中や取得失敗は完了と区別します。'}
+        if($test.followUp.kind -eq 'UsbTransfer'){$recordingNote+="`r`n"+(Get-TraceEvidenceText @(Get-SessionTraceEvidence $script:session $script:sessionDirectory|Where-Object testId -eq $test.id))}
         $explain=New-UiLabel ('録音・観察は終了しました。ノイズ記録 '+@($test.noiseUtc).Count+' 回。'+$recordingNote+"`r`n"+'結果を保存して次へ進みます。閉じた場合は結果未確定の中断記録として保存します。');$explain.Dock='Top'
         $endNotes=New-Object Windows.Forms.TextBox;$endNotes.Multiline=$true;$endNotes.ScrollBars='Vertical';$endNotes.Dock='Fill';$endNotes.Text=$test.notes
         $accept=New-UiButton '結果を保存して次へ';$accept.Dock='Bottom';$accept.DialogResult='OK'

@@ -28,6 +28,9 @@ jobs:
       - name: Test indexed reference and bounded USB traces
         shell: powershell
         run: .\tests\Run-FollowUpTests.ps1
+      - name: Test USB selection, capture absence, cancellation and artifact truth
+        shell: powershell
+        run: .\tests\Run-UsbReadinessTests.ps1
       - name: Exercise linked follow-up recording and USB capture
         shell: powershell
         run: .\scripts\Start-Diagnostics.ps1 -SmokeTest -ExerciseFollowUpWorkflow

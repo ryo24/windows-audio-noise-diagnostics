@@ -61,20 +61,26 @@ function Update-AudioUi {
     elseif(-not $occupied -and -not $probe.verification.reviewPlaybackCompleted){$audioStatus.Text=if($probe.status -in @('Failed','Interrupted')){'この録音は失敗・中断しています。報告書で状態を確認してください。'}else{'① 出力を選ぶ → ② 録音を最後まで再生 → ③ 聞こえ方を選び、照合結果を保存します。'}}
 }
 function Start-ObservationCapture {
-    param([string]$TestId)
+    param([string]$TestId,[switch]$PrepareOnly,[switch]$Prepared)
     if($audioMode.SelectedIndex -eq 2){return}
     if(-not (Test-CaptureReady)){throw '「2 条件を設定」で録音先と録音範囲を確認してください。'}
     Initialize-AudioInterop
     $mode=if($audioMode.SelectedIndex -eq 0){'Reference'}else{'ExternalApp'}
     $name=if($audioOutput.SelectedItem){$audioOutput.SelectedItem.Name}else{'出力未選択'}
-    $probe=New-AudioProbeRecord $mode $name $TestId ([int]$audioLength.SelectedItem)
-    $probe|Add-Member -NotePropertyName selectedOutputFormat -NotePropertyValue (Invoke-CollectionSection {[AudioNoiseDiagnostics.Endpoint]::Read($audioOutput.SelectedItem.Id)|Select-Object SampleRate,Channels,ContainerBits,FormatNote})
-    if($script:activeTest.followUp){$script:activeTest.followUp.probeId=$probe.id}
-    $probe|Add-Member -NotePropertyName playbackSnapshot -NotePropertyValue (Invoke-CollectionSection {Get-PlaybackSnapshot $script:session.id $audioOutput.SelectedItem.Id})
-    if($audioSource.SelectedIndex -eq 1){$probe.sourceKind='Microphone';$probe.inputEndpointName=$audioInput.SelectedItem.Name;$probe.files.recording='audio/'+$probe.id+'/microphone.wav';$probe.scope='マイク入力。周囲音・距離・マイクの処理も含みます。'}
-    if(-not $script:session.PSObject.Properties['audioProbes']){$script:session|Add-Member -NotePropertyName audioProbes -NotePropertyValue @()}
-    $script:session.audioProbes=@($script:session.audioProbes)+@($probe);$script:recordingProbe=$probe
-    [void](Add-TimelineEvent $script:session 'CaptureRequested' $TestId $probe.id);Save-CurrentSession
+    $probe=if($Prepared){$script:recordingProbe}else{New-AudioProbeRecord $mode $name $TestId ([int]$audioLength.SelectedItem)}
+    if($Prepared -and $probe.testId -ne $TestId){throw 'Prepared recording belongs to another test'}
+    if(-not $Prepared){
+        $probe|Add-Member -NotePropertyName selectedOutputFormat -NotePropertyValue (Invoke-CollectionSection {[AudioNoiseDiagnostics.Endpoint]::Read($audioOutput.SelectedItem.Id)|Select-Object SampleRate,Channels,ContainerBits,FormatNote})
+        if($script:activeTest.followUp){$script:activeTest.followUp.probeId=$probe.id}
+        $probe|Add-Member -NotePropertyName playbackSnapshot -NotePropertyValue (Invoke-CollectionSection {Get-PlaybackSnapshot $script:session.id $audioOutput.SelectedItem.Id})
+        if($audioSource.SelectedIndex -eq 1){$probe.sourceKind='Microphone';$probe.inputEndpointName=$audioInput.SelectedItem.Name;$probe.files.recording='audio/'+$probe.id+'/microphone.wav';$probe.scope='マイク入力。周囲音・距離・マイクの処理も含みます。'}
+        if(-not $script:session.PSObject.Properties['audioProbes']){$script:session|Add-Member -NotePropertyName audioProbes -NotePropertyValue @()}
+        $script:session.audioProbes=@($script:session.audioProbes)+@($probe);$script:recordingProbe=$probe
+        [void](Add-TimelineEvent $script:session 'CaptureRequested' $TestId $probe.id);Save-CurrentSession
+    }
+    if($PrepareOnly){$probe.status='AwaitingTrace';Save-CurrentSession;return}
+    if($Prepared){$probe.selectedOutputFormat=Invoke-CollectionSection {[AudioNoiseDiagnostics.Endpoint]::Read($audioOutput.SelectedItem.Id)|Select-Object SampleRate,Channels,ContainerBits,FormatNote}}
+    $probe.status='Starting'
     try {
         $path=Resolve-AudioFile $script:sessionDirectory $probe.files.recording
         [IO.Directory]::CreateDirectory((Split-Path -Parent $path))|Out-Null
@@ -94,8 +100,15 @@ function Start-ObservationCapture {
 }
 function Poll-AudioJobs {
     if($script:audioRecorder){
+        if($script:activeTest.followUp.captureStage -eq 'StartingAudio' -and $script:audioRecorder.Status -eq 'Recording'){
+            $script:activeTest.followUp.captureStage='Started'
+            $script:activeTest.followUp|Add-Member -NotePropertyName simultaneousConfirmed -NotePropertyValue (Get-ClockPoint) -Force
+            [void](Add-TimelineEvent $script:session 'SimultaneousCaptureConfirmed' $script:activeTest.id $script:recordingProbe.id)
+            Save-CurrentSession;Update-UiState
+        }
         $runAudioStatus.Text=('録音中：'+[Math]::Round($script:audioRecorder.ElapsedSeconds,1)+' / '+$script:recordingProbe.maximumSeconds+'秒。聞こえたノイズをボタンで記録してください。')
         if($script:audioRecorder.Finished){
+            if($script:activeTest.followUp.captureStage -eq 'StartingAudio'){$script:activeTest.followUp.captureStage='AudioFailed'}
             Complete-AudioProbeRecord $script:recordingProbe $script:audioRecorder $script:sessionDirectory
             $script:audioRecorder.Dispose();$script:audioRecorder=$null
             Save-CurrentSession;Refresh-AudioRecords

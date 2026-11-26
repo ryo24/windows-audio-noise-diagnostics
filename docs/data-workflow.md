@@ -84,3 +84,9 @@ external-results/
 v0.5以前の`durationSeconds`とUTCの開始終了差が違う場合は両方を示してください。v0.6以降はQPCによる観察時間とUTC差・差分を保存します。QPCは同じWindows起動内で比較し、別PC・再起動をまたいだ時刻やスマートフォンの時計とは直接比較しません。
 
 `data/`とexternal-resultsの調査データ・解析結果はGit管理対象外です。公開するのはプログラム・一般化した手順・合成データによるテスト・空フォルダー用ファイルだけです。
+
+## 開発版0.9.1-devのUSB取得確認
+
+bundle.jsonの`traceDataIncluded`は従来互換の書き出し設定値です。実ETLは`traceFileCount`と`files`で確認し、`traceEvidence`で試験ID・USB／Audio／内部録音の別状態、存在・サイズ、欠落、重複時間を照合します。未作成の失敗録音は`missingFiles`へ記載します。開始なしの記録でもZIPを持ち帰れます。
+
+trace.jsonの`target`は取得時点の選択出力からUSB物理祖先までの匿名refと一般化したトポロジーです。`endpointRef`を同じセッションの親チェーンへ結合し、ETLの初期状態イベントから解析時に対象を選びます。欠落や複数候補は推測で埋めません。`Export-UsbTraceEvents.ps1`の出力は新しいanalysisフォルダーへ保存し、原本のセッション・ETLは書き換えません。詳細と時刻基準は[USB追加調査](usb-follow-up.md)を参照してください。

@@ -22,6 +22,7 @@ function Export-DiagnosticBundle {
     if($session.id -notmatch '^[a-fA-F0-9]{32}$'){throw 'セッションIDが正しくありません。'}
     if(@($session.tests|Where-Object {$_.result -eq 'InProgress'}).Count -or @($session.audioProbes|Where-Object {$_.status -in @('Starting','Recording')}).Count){throw '進行中の調査・録音を終了してから書き出してください。'}
     $files=New-Object 'System.Collections.Generic.List[object]'
+    $missing=New-Object 'System.Collections.Generic.List[string]'
     $paths=@{}
     $addFile={param([string]$Relative,[string]$Expected='')
         if($paths.ContainsKey($Relative)){return}
@@ -34,7 +35,11 @@ function Export-DiagnosticBundle {
     }
     foreach($relative in @('session.json','report.html','tests.csv','bluetooth.csv','timeline.csv','network-diagnostics.json')){if(Test-Path -LiteralPath (Join-Path $SessionDirectory $relative)){& $addFile $relative}}
     foreach($probe in @($session.audioProbes)){
-        foreach($kind in @('recording','reference')){if($probe.files.$kind){[void](Resolve-AudioFile $SessionDirectory $probe.files.$kind);& $addFile $probe.files.$kind $probe.files.($kind+'Sha256')}}
+        foreach($kind in @('recording','reference')){if($probe.files.$kind){
+            $audioPath=Resolve-AudioFile $SessionDirectory $probe.files.$kind
+            if(-not (Test-Path -LiteralPath $audioPath) -and $probe.status -in @('NotStarted','Failed','Interrupted','NoAudioData')){$missing.Add('session/'+$probe.files.$kind);continue}
+            & $addFile $probe.files.$kind $probe.files.($kind+'Sha256')
+        }}
     }
     foreach($entry in @($session.physicalRecordings)){[void](Resolve-PhysicalMediaFile $SessionDirectory $entry.file.path);& $addFile $entry.file.path $entry.file.sha256}
     $excluded=New-Object 'System.Collections.Generic.List[string]'
@@ -45,6 +50,7 @@ function Export-DiagnosticBundle {
             if($trace.Name -notmatch '^[a-fA-F0-9]{32}$'){continue}
             Assert-RegularBundleFile $SessionDirectory $trace.FullName
             $statePath=Join-Path $trace.FullName 'trace.json'
+            $state=$null
             if(Test-Path -LiteralPath $statePath){
                 Assert-RegularBundleFile $SessionDirectory $statePath
                 $state=Get-Content -LiteralPath $statePath -Raw -Encoding UTF8|ConvertFrom-Json
@@ -65,6 +71,10 @@ function Export-DiagnosticBundle {
     [IO.Directory]::CreateDirectory($DestinationDirectory)|Out-Null
     $target=Join-Path $DestinationDirectory $name;$temporary=$target+'.tmp'
     $manifest=[pscustomobject]@{bundleVersion=1;sessionId=$session.id;exportedUtc=[DateTime]::UtcNow.ToString('o');exportTool=Get-ToolIdentity;files=@($files|Select-Object path,bytes,sha256);excludedFiles=$excluded.ToArray();traceDataIncluded=[bool]$IncludeTraces;scope='Current session only. UTC and QPC do not synchronize a smartphone clock. Raw media and optional ETL can contain private information.'}
+    $manifest|Add-Member -NotePropertyName traceEvidence -NotePropertyValue @(Get-SessionTraceEvidence $session $SessionDirectory)
+    $manifest|Add-Member -NotePropertyName missingFiles -NotePropertyValue $missing.ToArray()
+    $manifest|Add-Member -NotePropertyName traceFileCount -NotePropertyValue @($files|Where-Object {$_.path -match '\.etl$'}).Count
+    $manifest.scope+=' traceDataIncluded is the requested export option, not proof of any capture. traceFileCount and files list the actual ETLs; traceEvidence lists each test separately.'
     try{
         $archive=[IO.Compression.ZipFile]::Open($temporary,[IO.Compression.ZipArchiveMode]::Create)
         try{

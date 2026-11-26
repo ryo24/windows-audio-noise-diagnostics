@@ -324,6 +324,7 @@ function Save-Session {
     Write-AtomicText (Join-Path $Directory 'timeline.csv') ($timelineLines -join "`r`n") -Bom
     if(@($Session.networkDiagnostics|Where-Object {$null -ne $_}).Count){Write-AtomicText (Join-Path $Directory 'network-diagnostics.json') (ConvertTo-Json -InputObject @($Session.networkDiagnostics) -Depth 20)}
     $html=Get-ReportHtml $Session
-    $html=$html.Replace('</main>',((Get-TraceReportHtml $Directory)+'</main>'))
+    $traceOverview='<h2>試験ごとのUSB・Audio取得確認</h2><pre>'+(ConvertTo-HtmlText (Get-TraceEvidenceText @(Get-SessionTraceEvidence $Session $Directory)))+'</pre>'
+    $html=$html.Replace('</main>',($traceOverview+(Get-TraceReportHtml $Directory)+'</main>'))
     Write-AtomicText (Join-Path $Directory 'report.html') $html
 }

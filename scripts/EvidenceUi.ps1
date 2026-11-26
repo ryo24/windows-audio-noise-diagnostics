@@ -42,7 +42,20 @@ function Poll-DetailedTrace {
     try {$state=Read-TraceRunState $run;if($state){$run.state=$state}}catch{$readError=$_.Exception.GetType().Name}
     $script:tracePresentation=Get-TracePresentation $run $run.state $processState -ReadError $readError
     $run.phase=$script:tracePresentation.phase;$run.busy=$script:tracePresentation.busy
+    if($script:activeTest.followUp.captureStage -eq 'AwaitingTrace' -and $run.state.link.testId -eq $script:activeTest.id -and -not $script:finishRequested){
+        if($run.phase -eq 'Recording' -and $run.state.usb.status -eq 'Recording'){
+            $script:activeTest.followUp.captureStage='StartingAudio'
+            [void](Add-TimelineEvent $script:session 'UsbAudioReady' $script:activeTest.id $script:recordingProbe.id)
+            try{Start-ObservationCapture $script:activeTest.id -Prepared;Save-CurrentSession}
+            catch{$script:activeTest.followUp.captureStage='AudioFailed';Request-ObservationFinish;Show-UiError $_.Exception.Message}
+        }elseif(-not $run.busy){
+            $script:activeTest.followUp.captureStage='NotStarted';$script:recordingProbe.status='NotStarted'
+            $script:activeTest.notes+=' / USB＋Audioの開始を確認できず、テスト音と録音は開始しなかった。'
+            Request-ObservationFinish
+        }
+    }
     if(-not $run.busy){
+        if($script:activeTest.followUp.captureStage -in @('StartingAudio','Started') -and $run.state.link.testId -eq $script:activeTest.id -and -not $script:finishRequested){$script:activeTest.followUp.captureStage='TraceEnded';Request-ObservationFinish}
         if($script:tracePresentation.phase -eq 'Failed' -and $run.state.status -eq 'Completed'){
             $run.state|Add-Member -NotePropertyName lastWorkerStatus -NotePropertyValue 'Completed' -Force
             $run.state.status='Failed';$run.state|Add-Member -NotePropertyName errorType -NotePropertyValue 'SavedArtifactMismatch' -Force

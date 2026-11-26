@@ -46,13 +46,16 @@ $sessionActions=New-Object Windows.Forms.FlowLayoutPanel;$sessionActions.Dock='F
 $prepareNext=New-UiButton '2 条件を設定へ';$profileGrid.Controls.Add($prepareNext,1,6);$preparePage.Controls.Add($profileGrid)
 $prepareNext.Add_Click({$tabs.SelectedTab=$settingsPage})
 
-$settingsLayout=New-Object Windows.Forms.TableLayoutPanel;$settingsLayout.Dock='Fill';$settingsLayout.ColumnCount=1;$settingsLayout.RowCount=2
+$settingsLayout=New-Object Windows.Forms.TableLayoutPanel;$settingsLayout.Dock='Fill';$settingsLayout.ColumnCount=1;$settingsLayout.RowCount=3
+[void]$settingsLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',52)))
 [void]$settingsLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100)));[void]$settingsLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',52)))
-$settingsTabs=New-Object Windows.Forms.TabControl;$settingsTabs.Dock='Fill';$settingsLayout.Controls.Add($settingsTabs,0,0);$settingsPage.Controls.Add($settingsLayout)
+$usbPreset=New-UiButton 'ノイズ発生中：USB＋Audioの設定へ';$settingsLayout.Controls.Add($usbPreset,0,0)
+$usbPreset.Add_Click({$followUpChoice.SelectedIndex=1;$audioMode.SelectedIndex=0;$audioSource.SelectedIndex=0;$audioLength.SelectedItem='30';$settingsTabs.SelectedTab=$followUpTab;$tabs.SelectedTab=$settingsPage;Update-UiState})
+$settingsTabs=New-Object Windows.Forms.TabControl;$settingsTabs.Dock='Fill';$settingsLayout.Controls.Add($settingsTabs,0,1);$settingsPage.Controls.Add($settingsLayout)
 $audioTab=New-AudioSettingsTab;$testTab=New-UiPage '比較する条件';$btTab=New-UiPage 'Bluetooth（任意）'
 $evidenceTab=New-PlaybackConditionsTab;$followUpTab=New-FollowUpTab
 $settingsTabs.TabPages.AddRange([Windows.Forms.TabPage[]]@($audioTab,$followUpTab,$testTab,$btTab,$evidenceTab))
-$settingsNext=New-UiButton '3 調査画面へ';$settingsLayout.Controls.Add($settingsNext,0,1);$settingsNext.Add_Click({$tabs.SelectedTab=$runPage})
+$settingsNext=New-UiButton '3 調査画面へ';$settingsLayout.Controls.Add($settingsNext,0,2);$settingsNext.Add_Click({$tabs.SelectedTab=$runPage})
 $testGrid=New-UiGrid @(44,140,44,44,44,100,44,52) 180
 $testChoice=New-UiCombo @($script:definitions|ForEach-Object {$_.title});$guide=New-UiLabel '';$guide.Dock='Fill';$guide.AutoSize=$false
 $outputChoice=New-UiCombo @('3.5mm','HDMI','USB音声','Bluetooth','その他');$powerChoice=New-UiCombo @('PCのUSB','独立したUSB電源','テレビのUSB','該当なし','不明・その他')
@@ -72,7 +75,7 @@ Add-UiGuide $btGrid 3 "開始ボタンは「3 調査する」に一つだけで�
 $btStatus=New-UiLabel '取得した状態は、調査中にここへ表示します。';$btStatus.Dock='Fill';$btStatus.AutoSize=$false;$btGrid.Controls.Add($btStatus,0,4);$btGrid.SetColumnSpan($btStatus,2);$btTab.Controls.Add($btGrid)
 
 $runLayout=New-Object Windows.Forms.TableLayoutPanel;$runLayout.Dock='Fill';$runLayout.ColumnCount=1;$runLayout.RowCount=5
-foreach($height in @(90,84,64,58,0)){$style=New-Object Windows.Forms.RowStyle;if($height){$style.SizeType='Absolute';$style.Height=$height}else{$style.SizeType='Percent';$style.Height=100};[void]$runLayout.RowStyles.Add($style)}
+foreach($height in @(112,84,64,78,0)){$style=New-Object Windows.Forms.RowStyle;if($height){$style.SizeType='Absolute';$style.Height=$height}else{$style.SizeType='Percent';$style.Height=100};[void]$runLayout.RowStyles.Add($style)}
 $runSummary=New-UiLabel '';$runSummary.Dock='Fill';$runSummary.AutoSize=$false;$runLayout.Controls.Add($runSummary,0,0)
 $runInstruction=New-UiLabel '';$runInstruction.Dock='Fill';$runInstruction.AutoSize=$false;$runInstruction.Font=New-Object Drawing.Font('Yu Gothic UI',11,[Drawing.FontStyle]::Bold);$runLayout.Controls.Add($runInstruction,0,1)
 $runButtons=New-Object Windows.Forms.FlowLayoutPanel;$runButtons.Dock='Fill'
@@ -101,10 +104,11 @@ while($receiveGrid.RowStyles.Count -gt 4){$receiveGrid.RowStyles.RemoveAt(4)}
 $phoneTab.Text='スマホをつなぐ（任意）';$phoneStart.Text='スマホからの受信を開く';$phoneStatus.Text='先に「1 準備する」で記録を作成してください。';$physicalPlay.Text='取り込んだ実音を再生'
 $physicalTab.Controls.Add($physicalGrid)
 $history=New-Object Windows.Forms.TextBox;$history.Multiline=$true;$history.ReadOnly=$true;$history.ScrollBars='Vertical';$history.Dock='Fill';$historyTab.Controls.Add($history)
-$reviewTabs.TabPages.AddRange([Windows.Forms.TabPage[]]@($audioReviewTab,$physicalTab,$historyTab))
+$traceResultsTab=New-UiPage 'USB・Audio取得結果';$traceResults=New-Object Windows.Forms.TextBox;$traceResults.Multiline=$true;$traceResults.ReadOnly=$true;$traceResults.ScrollBars='Vertical';$traceResults.Dock='Fill';$traceResultsTab.Controls.Add($traceResults)
+$reviewTabs.TabPages.AddRange([Windows.Forms.TabPage[]]@($audioReviewTab,$physicalTab,$traceResultsTab,$historyTab))
 $reviewNext=New-UiButton '5 書き出すへ';$reviewLayout.Controls.Add($reviewNext,0,1);$reviewNext.Add_Click({$tabs.SelectedTab=$exportPage});$reviewPage.Controls.Add($reviewLayout)
 
-$exportGrid=New-UiGrid @(100,66,54,60,64,80) 185
+$exportGrid=New-UiGrid @(100,66,54,60,64,80,180) 185
 Add-UiGuide $exportGrid 0 "調査を終えたら、必要なログ・録音・動画をZIPにまとめます。`r`n「ZIPを書き出す」を押すと、保存後にエクスプローラーでそのZIPを選択します。`r`n別のPCへ渡す場合は、このZIPをコピーしてください。自動送信はしません。"
 $exportReady=New-UiLabel '';$exportReady.Dock='Fill';$exportReady.AutoSize=$false;$exportGrid.Controls.Add($exportReady,0,1);$exportGrid.SetColumnSpan($exportReady,2)
 $report=New-UiButton '報告書を開く';$folder=New-UiButton '記録フォルダーを開く'
@@ -112,6 +116,7 @@ $fileActions=New-Object Windows.Forms.FlowLayoutPanel;$fileActions.Dock='Fill';$
 $includeTraces=New-Object Windows.Forms.CheckBox;$includeTraces.Text='詳細ETLも含める（プロセス名・パスなどの情報を含む場合があります）';$includeTraces.Dock='Fill';$exportGrid.Controls.Add($includeTraces,0,3);$exportGrid.SetColumnSpan($includeTraces,2)
 $export=New-UiButton 'ZIPを書き出して場所を開く';$exportGrid.Controls.Add($export,1,4)
 $includeTraces.Add_CheckedChanged({Update-UiState})
+$exportTraceResults=New-Object Windows.Forms.TextBox;$exportTraceResults.Multiline=$true;$exportTraceResults.ReadOnly=$true;$exportTraceResults.ScrollBars='Vertical';$exportTraceResults.Dock='Fill';$exportGrid.Controls.Add($exportTraceResults,0,6);$exportGrid.SetColumnSpan($exportTraceResults,2)
 Add-UiGuide $exportGrid 5 "保存先は data/exports/ です。音声・動画も含むため、共有する相手と内容を確認してください。`r`nエージェントが同じPCにある場合は data/sessions/ を直接解析することもできます。"
 $exportPage.Controls.Add($exportGrid)
 $tabs.Add_SelectedIndexChanged({if($script:uiReady -and $tabs.SelectedTab -in @($settingsPage,$reviewPage) -and -not $script:activeTest -and -not $script:audioPlayback -and $audioOutput.Items.Count -eq 0){Refresh-AudioOutputs};Update-UiState})

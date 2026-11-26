@@ -74,7 +74,7 @@ function Save-CurrentSession {
         if($script:traceRun.state.link.testId){
             $linked=@($script:session.tests|Where-Object {$_.id -eq $script:traceRun.state.link.testId})
             $probe=@($script:session.audioProbes|Where-Object {$_.id -eq $script:traceRun.state.link.probeId})
-            if($linked.Count -eq 1 -and $probe.Count -eq 1 -and $linked[0].followUp){$linked[0].followUp|Add-Member -NotePropertyName traceCoverage -NotePropertyValue (Get-FollowUpCoverage $script:traceRun.state $probe[0]) -Force}
+            if($linked.Count -eq 1 -and $probe.Count -eq 1 -and $linked[0].followUp){$linked[0].followUp|Add-Member -NotePropertyName traceCoverage -NotePropertyValue (Get-FollowUpCoverage $script:traceRun.state $probe[0] $linked[0]) -Force}
         }
         Save-Session $script:session $script:sessionDirectory
         Refresh-FollowUpReferences
@@ -210,8 +210,9 @@ $start.Add_Click({
         $script:bluetoothTest=$test
         $script:bluetoothMonitor=Start-BluetoothMonitor -Salt $script:session.id -InventoryPath (Join-Path $PSScriptRoot 'Inventory.ps1') -MaxSamples $test.bluetoothSampling.maxSamples
         $script:finishRequested=$false
-        Start-ObservationCapture $test.id
+        Start-ObservationCapture $test.id -PrepareOnly:($test.followUp.kind -eq 'UsbTransfer')
         if($test.followUp.kind -eq 'UsbTransfer'){
+            $test.followUp|Add-Member -NotePropertyName captureStage -NotePropertyValue 'AwaitingTrace' -Force
             $link=[pscustomobject]@{testId=$test.id;probeId=$script:recordingProbe.id;endpointRef=(Get-AnonymousDeviceRef ('SWD\MMDEVAPI\'+$audioOutput.SelectedItem.Id) $script:session.id)}
             Start-LinkedTrace -IncludeUsb -Link $link
             $test.followUp.traceId=$script:traceRun.id
@@ -219,7 +220,7 @@ $start.Add_Click({
         }
         $script:contextTest=$test;Start-CollectionWorker 'context'
         $tabs.SelectedTab=$runPage
-        $runAudioStatus.Text=if($audioMode.SelectedIndex -eq 2){'音声録音は行いません。ノイズ時刻と状態の記録を開始しました。'}else{'録音を開始しています。設定した秒数で録音と観察が自動終了します。'}
+        $runAudioStatus.Text=if($test.followUp.kind -eq 'UsbTransfer'){'USB＋Audioの開始確認待ちです。テスト音と録音はまだ開始していません。'}elseif($audioMode.SelectedIndex -eq 2){'音声録音は行いません。ノイズ時刻と状態の記録を開始しました。'}else{'録音を開始しています。設定した秒数で録音と観察が自動終了します。'}
         $status.Text='調査を開始しました。ノイズは共通ボタンで記録してください。'
         Update-UiState
     } catch { if($script:activeTest){$script:activeTest.notes+=' / 調査開始中に取得・録音エラー。';Request-ObservationFinish};Show-UiError $_.Exception.Message }

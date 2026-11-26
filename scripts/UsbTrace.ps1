@@ -3,7 +3,7 @@
     @(foreach($name in $names){
         $provider=Get-WinEvent -ListProvider $name -ErrorAction Stop
         [long]$mask=0
-        foreach($keyword in @('Default','USBError','HeadersBusTrace','Rundown')){
+        foreach($keyword in @('Default','USBError','HeadersBusTrace','Rundown','StateMachine')){
             $entry=@($provider.Keywords|Where-Object {$_.Name -eq $keyword})
             if($entry.Count -ne 1){throw 'Required USB header keyword is unavailable'}
             $mask=$mask -bor [long]$entry[0].Value

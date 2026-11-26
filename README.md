@@ -12,6 +12,8 @@ PCに挿したマイクや、QRで接続したスマートフォンから実音�
 
 PCが有線LAN・スマホがWi-Fiでも利用できます。QRのページを開けない場合は、[Android／Firefoxの接続診断](docs/phone-connection-troubleshooting.md)を参照してください。アプリから接続診断を保存してZIPに含められます。接続せず、スマホで撮った動画をUSBでPCへコピーして取り込む方法も使えます。
 
+developの **0.9.1-dev** では、USB＋Audioの開始確認後にテスト音を流す入口と、試験ごとの取得状態・実ETL確認を追加しています。[開発版での最短手順](docs/usb-follow-up.md#対象pcでの最短手順)を参照してください。mainへの配信は別段階です。
+
 ## 最初の起動
 
 対象PCに [Git for Windows](https://git-scm.com/downloads/win) がある状態で、PowerShellまたはコマンドプロンプトで実行します。
