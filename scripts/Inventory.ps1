@@ -10,6 +10,7 @@
 . (Join-Path $PSScriptRoot 'TraceEvidence.ps1')
 . (Join-Path $PSScriptRoot 'UsbEvents.ps1')
 . (Join-Path $PSScriptRoot 'Investigation.ps1')
+. (Join-Path $PSScriptRoot 'TraceStateStore.ps1')
 . (Join-Path $PSScriptRoot 'Trace.ps1')
 . (Join-Path $PSScriptRoot 'TraceUiState.ps1')
 . (Join-Path $PSScriptRoot 'PlaybackReview.ps1')

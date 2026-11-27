@@ -50,6 +50,46 @@ public static class AtomicReaderFixture {
     Assert-Integration ($view.phase -eq 'Completed' -and -not $view.busy) 'Valid saved state and ETL complete the UI without relying on an elevated process handle'
     $complete.bytes=8;$view=Get-TracePresentation $run $complete Exited $later
     Assert-Integration ($view.phase -eq 'Failed') 'Mismatching ETL cannot be reported as successfully saved'
+    $contention=New-TraceRun $directory $session.id
+    $primary=Join-Path $contention.directory 'trace.json'
+    $recovery=Join-Path $contention.directory 'trace-recovery.json'
+    $script:primaryHold=$null;$script:recoveryHold=$null
+    try {
+        $continued=Invoke-DetailedTrace -SessionPath (Join-Path $directory 'session.json') -TraceId $contention.id -Seconds 1 -WprRunner {
+            param($arguments)
+            if($arguments[0] -eq '-start'){$script:primaryHold=[IO.File]::OpenRead($primary)}
+            if($arguments[0] -eq '-marker'){
+                $live=Read-TraceRunState $contention
+                Assert-Integration ($live.status -eq 'Recording' -and $live.stateWrites.writeFailures -ge 1 -and $live.stateWrites.recoveryWrites -ge 1) 'Live state survives a Windows sharing violation on trace.json'
+                $script:recoveryHold=[IO.File]::OpenRead($recovery)
+            }
+            if($arguments[0] -eq '-stop'){[IO.File]::WriteAllText($arguments[1],'Synthetic ETL after trace state contention')}
+            return 0
+        }
+        $final=Read-TraceStateRecord $contention.directory -TraceId $contention.id -SessionId $session.id
+        Assert-Integration ($continued.status -eq 'Completed' -and $final.name -eq 'trace-final.json' -and $final.state.bytes -gt 0 -and $final.state.stateWrites.writeFailures -ge 3) 'Both regular status files can stay locked while ETL stop, hashing and final state succeed'
+        Save-Session $session $directory
+        $bundle=Export-DiagnosticBundle $directory (Join-Path $temporary 'recovery-export') -IncludeTraces
+        $exported=(Test-DiagnosticBundle $bundle).manifest
+        $exportedState=$exported.files|Where-Object path -eq ('session/traces/'+$contention.id+'/trace.json')
+        Assert-Integration ($exportedState.sha256 -eq (Get-FileHash $final.path).Hash -and $exported.files.path -contains ('session/traces/'+$contention.id+'/trace.etl')) 'Export selects the authoritative recovered state and preserves its bytes at the original archive path'
+        $resumed=Join-Path $temporary 'recovery-resume'
+        Import-SessionTraces $directory $resumed
+        Assert-Integration ((Get-FileHash (Join-Path $resumed ('traces/'+$contention.id+'/trace.json'))).Hash -eq $exportedState.sha256) 'Resuming selects the same final state without copying stale snapshots'
+    }finally{
+        if($script:recoveryHold){$script:recoveryHold.Dispose()}
+        if($script:primaryHold){$script:primaryHold.Dispose()}
+    }
+    $claimed=New-TraceRun $directory $session.id
+    $reserved=[IO.File]::Open((Join-Path $claimed.directory 'trace-owner.lock'),[IO.FileMode]::CreateNew)
+    try {
+        $duplicateRejected=$false
+        try{Invoke-DetailedTrace -SessionPath (Join-Path $directory 'session.json') -TraceId $claimed.id -Seconds 1 -WprRunner {throw 'Native commands must not run for a duplicate claim'}|Out-Null}
+        catch{$duplicateRejected=$_.Exception.Message -match 'already claimed'}
+        Assert-Integration ($duplicateRejected -and (Read-TraceRunState $claimed).status -eq 'Launching') 'A second helper is rejected before touching the launch state or native trace'
+    }finally{$reserved.Dispose()}
+    Set-TraceUiOutcome $claimed 'HelperExited' 'NoFinalState'
+    Assert-Integration ((Read-TraceRunState $claimed).status -eq 'HelperExited' -and (Read-TraceStateFile (Join-Path $claimed.directory 'trace.json')).status -eq 'Launching') 'UI exit evidence stays separate and leaves the collector state untouched'
     $native=Join-Path $temporary "Native 日本語 O'Brien";[IO.Directory]::CreateDirectory($native)|Out-Null
     $exe=Join-Path $native 'fixture.exe';$argumentFile=Join-Path $native 'arguments.txt'
     Add-Type -TypeDefinition 'public class TraceNativeFixture {public static int Main(string[] a){System.IO.File.WriteAllLines(a[0],a);byte[] oemSample=new byte[]{130,160};System.Console.OpenStandardOutput().Write(oemSample,0,oemSample.Length);System.Console.OpenStandardError().Write(oemSample,0,oemSample.Length);System.Console.Write(new string((char)120,200000));System.Console.Error.Write(new string((char)121,200000));System.Threading.Thread.Sleep(1300);return 17;}}' -OutputAssembly $exe -OutputType ConsoleApplication

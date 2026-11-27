@@ -99,3 +99,5 @@ USB付き調査の`trace.json.investigation.files`に、前後情報・サンプ
 
 
 0.10.1-devの連動調査では、`trace.json.captureHandshake`にトレース開始から録音開始応答までの状態と時計を保存します。開始前の詳細な機器・電源照会は省き、開始前に取った音声の形式・再生状態と、保存後に取った機器・電源情報の時刻を明記します。`target.collectionPhase=AfterTrace`の親チェーンは保存後の観測です。通常の調査から書き出すZIPで開始確認と終了理由も読めます。
+
+0.10.2-devでは、収集中に`trace.json`を更新できない場合、代替の状態ファイルに記録します。ローカル原本の`trace-recovery.json`、`trace-final.json`、`trace-ui.json`は、アプリが試験ID・更新順・終了状態を照合します。書き出しと記録再開では、選んだ状態の原本バイト列を従来と同じ`trace.json`として扱います。`stateWrites`には書き込み失敗と代替保存の回数、最後の失敗の時刻とエラーコードを残します。

@@ -24,9 +24,9 @@ function Export-DiagnosticBundle {
     $files=New-Object 'System.Collections.Generic.List[object]'
     $missing=New-Object 'System.Collections.Generic.List[string]'
     $paths=@{}
-    $addFile={param([string]$Relative,[string]$Expected='')
+    $addFile={param([string]$Relative,[string]$Expected='', [string]$SourcePath='')
         if($paths.ContainsKey($Relative)){return}
-        $path=Join-Path $SessionDirectory $Relative
+        $path=if($SourcePath){$SourcePath}else{Join-Path $SessionDirectory $Relative}
         if(-not (Test-Path -LiteralPath $path -PathType Leaf)){throw ('必要なファイルがありません: '+$Relative)}
         Assert-RegularBundleFile $SessionDirectory $path
         $hash=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
@@ -49,13 +49,12 @@ function Export-DiagnosticBundle {
         foreach($trace in Get-ChildItem -LiteralPath $traceRoot -Directory){
             if($trace.Name -notmatch '^[a-fA-F0-9]{32}$'){continue}
             Assert-RegularBundleFile $SessionDirectory $trace.FullName
-            $statePath=Join-Path $trace.FullName 'trace.json'
-            $state=$null
-            if(Test-Path -LiteralPath $statePath){
-                Assert-RegularBundleFile $SessionDirectory $statePath
-                $state=Get-Content -LiteralPath $statePath -Raw -Encoding UTF8|ConvertFrom-Json
+            $record=Read-TraceStateRecord $trace.FullName -SessionDirectory $SessionDirectory
+            $state=$record.state
+            if($state){
                 if($state.status -in @('Launching','Starting','AwaitingCapture','Recording','Stopping','Inspecting')){throw '詳細トレースの保存完了を待ってから書き出してください。'}
-                & $addFile ('traces/'+$trace.Name+'/trace.json')
+                # Keep the established archive path even when the live recorder switched files.
+                & $addFile ('traces/'+$trace.Name+'/trace.json') '' $record.path
                 foreach($artifact in @($state.investigation.files)){
                     if($artifact.name -notin @('investigation-before.json','investigation-after.json','investigation-samples.json','investigation-events.json','investigation-hypotheses.json','usb-validation.json','usb-provider-schema.json','usb-providers.txt')){continue}
                     & $addFile ('traces/'+$trace.Name+'/'+$artifact.name) $artifact.sha256
@@ -191,8 +190,10 @@ function Import-SessionTraces {
     if(-not (Test-Path -LiteralPath $sourceRoot)){return}
     foreach($directory in Get-ChildItem -LiteralPath $sourceRoot -Directory){
         if($directory.Name -notmatch '^[a-fA-F0-9]{32}$'){continue}
+        $record=Read-TraceStateRecord $directory.FullName -SessionDirectory $SourceDirectory
         foreach($name in @('trace.json','trace.etl','usb.etl','investigation-before.json','investigation-after.json','investigation-samples.json','investigation-events.json','investigation-hypotheses.json','usb-validation.json','usb-provider-schema.json','usb-providers.txt')){
-            $source=Join-Path $directory.FullName $name
+            $source=if($name -eq 'trace.json'){$record.path}else{Join-Path $directory.FullName $name}
+            if(-not $source){continue}
             if(-not (Test-Path -LiteralPath $source)){continue}
             Assert-RegularBundleFile $SourceDirectory $source
             $target=Join-Path (Join-Path (Join-Path $TargetDirectory 'traces') $directory.Name) $name

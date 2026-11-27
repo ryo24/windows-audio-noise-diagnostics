@@ -49,20 +49,8 @@ function Read-TraceCaptureAck {
 }
 function Read-TraceRunState {
     param($Run)
-    $path=Join-Path $Run.directory 'trace.json'
-    # Retain a handle to one complete version while allowing the helper to
-    # atomically replace the path. Size and JSON then refer to the same file.
-    $share=[IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
-    try{$file=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::Read,$share)}
-    catch [IO.FileNotFoundException]{return $null}
-    catch [IO.DirectoryNotFoundException]{return $null}
-    try {
-        if($file.Length -gt 16MB){throw 'Trace state exceeds its limit'}
-        $reader=[IO.StreamReader]::new($file,[Text.Encoding]::UTF8)
-        try{$state=$reader.ReadToEnd()|ConvertFrom-Json}finally{$reader.Dispose()}
-    }finally{$file.Dispose()}
-    if($state.id -ne $Run.id -or $state.sessionId -ne $Run.sessionId){throw 'Trace state belongs to another run'}
-    return $state
+    $record=Read-TraceStateRecord $Run.directory -TraceId $Run.id -SessionId $Run.sessionId
+    return $record.state
 }
 function Get-TraceAgeSeconds {
     param($Point,$Now=(Get-ClockPoint))
@@ -135,6 +123,9 @@ function Get-TracePresentation {
         $text='WPRの開始結果を待っています（'+$age+'秒経過）。管理者権限の確認、または保存先の状態を確認してください。';$canOpen=$true
     }
     if($State.usb.requested -or $State.includeUsb){$text='USB＋Audio：'+$text}
+    if($State.stateWrites.recoveryWrites -and $State.stateWrites.writeFailures){
+        $text+=if($busy){' 状態ファイルの競合を検出し、代替ファイルへ記録しています。'}else{' 状態ファイルが使用中だったため、代替保存を使いました。'}
+    }
     if($ReadError -and $busy){$text+=' 状態ファイルを読めないため再確認中です。';$canOpen=$true}
     [pscustomobject]@{phase=$phase;busy=$busy;canStop=$canStop;canOpen=$canOpen;text=$text;indeterminate=$indeterminate}
 }

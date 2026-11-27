@@ -20,7 +20,7 @@ function Get-ToolIdentity {
 }
 
 function Write-AtomicText {
-    param([string]$Path, [string]$Text, [switch]$Bom)
+    param([string]$Path, [string]$Text, [switch]$Bom, [ValidateRange(1,100)][int]$Attempts=20)
     $directory = Split-Path -Parent $Path
     [IO.Directory]::CreateDirectory($directory) | Out-Null
     $temporary = Join-Path $directory ([IO.Path]::GetRandomFileName() + '.tmp')
@@ -34,7 +34,7 @@ function Write-AtomicText {
                 else { [IO.File]::Move($temporary, $Path) }
                 break
             } catch [IO.IOException] {
-                if($attempt -ge 19){throw}
+                if($attempt -ge ($Attempts-1)){throw}
                 Start-Sleep -Milliseconds 25
             }
         }

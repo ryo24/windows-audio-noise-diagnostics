@@ -68,18 +68,28 @@ if($exercise){
             Assert-Ui ($waiting.status -eq 'AwaitingCapture' -and $waiting.captureHandshake.status -eq 'Waiting' -and
                 $waiting.usb.status -eq 'Recording' -and $waiting.audioStatus -eq 'Recording' -and
                 -not $script:audioRecorder -and -not $mark.Enabled) 'The helper must hold readiness independently of the trace duration until delayed UI polling begins audio.'
+            # A third-party reader can hold the old file open during recording and save.
+            Wait-Ui {
+                try{$traceReader=[IO.File]::OpenRead((Join-Path $script:traceRun.directory 'trace.json'));$script:fixtureTraceReader=$traceReader;$true}
+                catch [IO.IOException]{$false}
+            } 5
         }finally{$timer.Start()}
-        Wait-Ui {$script:traceRun.phase -eq 'Recording' -and $script:activeTest.followUp.captureStage -eq 'Started'} 25
-        $linkedTest=$script:activeTest;$linkedProbe=$script:recordingProbe
-        Assert-Ui ($linkedTest.followUp.traceId -eq $script:traceRun.id -and $script:traceRun.state.link.testId -eq $linkedTest.id -and $script:traceRun.state.link.probeId -eq $linkedProbe.id) 'Trace, probe and comparison must be linked by IDs.'
-        Assert-Ui ($script:traceRun.state.captureHandshake.status -eq 'Acknowledged' -and $script:traceRun.state.requestedSeconds -eq 30 -and
-            $script:traceRun.state.captureHandshake.acknowledged.qpc -eq $linkedTest.followUp.simultaneousConfirmed.qpc) 'The independent helper must accept the matching QPC handshake before starting the configured capture timer.'
-        Assert-Ui ($linkedProbe.referenceId -like '*v2-indexed*' -and $linkedProbe.selectedOutputFormat.status -eq 'collected') 'Follow-up must use indexed sound and the actual selected output format.'
-        Assert-Ui (@($script:session.timeline|Where-Object kind -eq 'UsbAudioReady').Count -eq 1 -and @($script:session.timeline|Where-Object kind -eq 'SimultaneousCaptureConfirmed').Count -eq 1 -and $mark.Enabled) 'Readiness and simultaneous confirmation must be distinct recorded points.'
-        Save-UiProof 'follow-up-recording';$mark.PerformClick();$finish.PerformClick()
-        Assert-Ui ($script:traceRun.stopRequested -and $script:finishRequested) 'The common finish must request trace and recording stop together.'
-        Wait-Ui {-not $script:activeTest -and -not $script:worker -and -not $script:bluetoothMonitor -and -not (Test-DetailedTraceBusy)}
-        Assert-Ui ($script:traceRun.phase -eq 'Completed' -and (Test-Path (Join-Path $script:traceRun.directory 'usb.etl'))) 'Linked USB trace must finalize before export.'
+        $traceReader=$script:fixtureTraceReader
+        $script:fixtureTraceReader=$null
+        try{
+            Wait-Ui {$script:traceRun.phase -eq 'Recording' -and $script:activeTest.followUp.captureStage -eq 'Started'} 25
+            $linkedTest=$script:activeTest;$linkedProbe=$script:recordingProbe
+            Assert-Ui ($linkedTest.followUp.traceId -eq $script:traceRun.id -and $script:traceRun.state.link.testId -eq $linkedTest.id -and $script:traceRun.state.link.probeId -eq $linkedProbe.id) 'Trace, probe and comparison must be linked by IDs.'
+            Assert-Ui ($script:traceRun.state.captureHandshake.status -eq 'Acknowledged' -and $script:traceRun.state.requestedSeconds -eq 30 -and
+                $script:traceRun.state.captureHandshake.acknowledged.qpc -eq $linkedTest.followUp.simultaneousConfirmed.qpc) 'The independent helper must accept the matching QPC handshake before starting the configured capture timer.'
+            Assert-Ui ($linkedProbe.referenceId -like '*v2-indexed*' -and $linkedProbe.selectedOutputFormat.status -eq 'collected') 'Follow-up must use indexed sound and the actual selected output format.'
+            Assert-Ui (@($script:session.timeline|Where-Object kind -eq 'UsbAudioReady').Count -eq 1 -and @($script:session.timeline|Where-Object kind -eq 'SimultaneousCaptureConfirmed').Count -eq 1 -and $mark.Enabled) 'Readiness and simultaneous confirmation must be distinct recorded points.'
+            Save-UiProof 'follow-up-recording';$mark.PerformClick();$finish.PerformClick()
+            Assert-Ui ($script:traceRun.stopRequested -and $script:finishRequested) 'The common finish must request trace and recording stop together.'
+            Wait-Ui {-not $script:activeTest -and -not $script:worker -and -not $script:bluetoothMonitor -and -not (Test-DetailedTraceBusy)}
+            Assert-Ui ($script:traceRun.phase -eq 'Completed' -and (Test-Path (Join-Path $script:traceRun.directory 'usb.etl'))) 'Linked USB trace must finalize before export.'
+            Assert-Ui ($script:traceRun.state.stateWrites.recoveryWrites -gt 0 -and $script:traceRun.state.stateWrites.writeFailures -gt 0) 'The actual linked UI must keep recording and save after switching away from a locked status file.'
+        }finally{$traceReader.Dispose()}
         Assert-Ui (@($linkedProbe.capture.streamTiming.renderClockSamples).Count -gt 0 -or [bool]$linkedProbe.capture.streamTiming.renderClockError) 'Deep capture must retain driver clock samples or an explicit clock API error.'
         Assert-Ui (@($linkedProbe.capture.streamTiming.capturePackets).Count -gt 0 -or $linkedProbe.status -eq 'NoAudioData') 'Deep capture must retain capture-packet QPC timing when audio packets exist.'
         Assert-Ui ($traceResults.Text.Contains('保存確認済み') -and $traceResults.Text.Contains('bytes')) 'Results must show separate USB and Audio artifact states and actual sizes.'

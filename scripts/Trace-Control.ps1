@@ -3,4 +3,5 @@ $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Core.ps1')
 . (Join-Path $PSScriptRoot 'Inventory.ps1')
 $state=Invoke-DetailedTrace -SessionPath $SessionPath -Seconds $Seconds -TraceId $TraceId -IncludeUsb:$IncludeUsb
+if($state.errorType -eq 'TraceStateWriteFailed'){exit 3}
 if($state.status -notin @('Completed','Cancelled')){exit 1}
