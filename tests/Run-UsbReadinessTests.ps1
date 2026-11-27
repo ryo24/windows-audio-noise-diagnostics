@@ -23,6 +23,7 @@ try {
  $run.state.status='LaunchFailed';$run.state.errorType='AdminApprovalCancelled';Write-AtomicText (Join-Path $run.directory 'trace.json') ($run.state|ConvertTo-Json -Depth 8)
  $rows=@(Get-SessionTraceEvidence $session $directory)
  Assert-UsbReady ($rows[0].usb.status -eq 'AdminCancelled' -and $rows[0].audioTrace.status -eq 'AdminCancelled' -and $rows[0].recordingStatus -eq 'NotStarted') 'Admin cancellation and unstarted recording remain distinct from saved traces'
+ Assert-UsbReady ((Get-TraceEvidenceText $rows) -notmatch '取得エラー：|未取得項目 0') 'Unattempted diagnostics cannot invent a native error or a zero-missing coverage check'
  Save-Session $session $directory;$zip=Export-DiagnosticBundle $directory (Join-Path $directory 'exports') -IncludeTraces;$manifest=(Test-DiagnosticBundle $zip).manifest
  Assert-UsbReady ($manifest.traceFileCount -eq 0 -and $manifest.missingFiles.Count -eq 2 -and $manifest.traceEvidence[0].testId -eq $test.id) 'A cancelled trial exports existing data with missing audio files and the correct test identity'
  $state=$run.state;$state.errorType=$null;$state.status='StopFailed';$state.bytes=7;$state.sha256=$null

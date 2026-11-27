@@ -52,6 +52,10 @@ function Get-TracePresentation {
             $text='WPR側が停止処理に入り、ETLを保存しています（'+$elapsed+'秒経過）。保存完了はまだ未確認です。'
             if($elapsed -ge 120){$phase='SaveDelayed';$text='WPRの保存完了の応答がありません（'+$elapsed+'秒経過）。完了とは扱いません。保存先の状態とインスタンス名を確認してください。';$canOpen=$true}
         }
+        'Inspecting' {
+            $phase='Inspecting';$canStop=$false;$canOpen=$true
+            $text='ETLの停止処理後、追加情報とUSBイベントの読み取りを確認しています。保存済みファイルと検査結果は別々に記録します。'
+        }
         'Completed' {
             $path=Join-Path $Run.directory 'trace.etl'
             if((Test-Path -LiteralPath $path -PathType Leaf) -and $State.bytes -gt 0 -and (Get-Item -LiteralPath $path).Length -eq $State.bytes -and $State.sha256 -match '^[a-fA-F0-9]{64}$' -and (-not $State.usb.requested -or ($State.usb.status -eq 'Completed' -and (Test-Path -LiteralPath (Join-Path $Run.directory 'usb.etl')) -and $State.usb.bytes -gt 0 -and $State.usb.sha256 -match '^[a-fA-F0-9]{64}$' -and (Get-Item -LiteralPath (Join-Path $Run.directory 'usb.etl')).Length -eq $State.usb.bytes))){
@@ -69,7 +73,7 @@ function Get-TracePresentation {
     if($busy -and $ProcessState -eq 'Exited'){
         $phase='Failed';$busy=$false;$canStop=$false;$canOpen=$true;$indeterminate=$false
         $text='WPR用プロセスが保存完了を記録せず終了しました（終了コード：'+$Run.processExitCode+'）。停止・保存は未確認です。保存先の状態を確認してください。'
-    }elseif($busy -and $Run.stopRequested -and $status -ne 'Stopping'){
+    }elseif($busy -and $Run.stopRequested -and $status -notin @('Stopping','Inspecting')){
         $phase='StopRequested';$elapsed=Get-TraceAgeSeconds $Run.stopPoint $Now
         $text='停止要求を送りました。WPR側の受付を待っています（'+$elapsed+'秒経過）。停止・保存の完了はまだ未確認です。';$canStop=$false
         if($elapsed -ge 15){$phase='StopUnconfirmed';$text='停止要求後もWPR側の状態が変わりません（'+$elapsed+'秒経過）。停止・保存は未確認です。保存先のtrace.jsonを確認してください。';$canOpen=$true}

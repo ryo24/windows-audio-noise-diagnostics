@@ -53,10 +53,11 @@ public static class AtomicReaderFixture {
     $native=Join-Path $temporary "Native 日本語 O'Brien";[IO.Directory]::CreateDirectory($native)|Out-Null
     $exe=Join-Path $native 'fixture.exe';$argumentFile=Join-Path $native 'arguments.txt'
     Add-Type -TypeDefinition 'public class TraceNativeFixture {public static int Main(string[] a){System.IO.File.WriteAllLines(a[0],a);System.Console.Write(new string((char)120,200000));System.Console.Error.Write(new string((char)121,200000));System.Threading.Thread.Sleep(1300);return 17;}}' -OutputAssembly $exe -OutputType ConsoleApplication
-    $script:heartbeats=0
-    $code=Invoke-WprProcess -Executable $exe -Arguments @($argumentFile,"description O'Brien 日本語") -Instance AudioNoiseFixture -Heartbeat {$script:heartbeats++}
+    $script:heartbeats=0;$nativeResults=New-Object 'System.Collections.Generic.List[object]'
+    $code=Invoke-WprProcess -Executable $exe -Arguments @($argumentFile,"description O'Brien 日本語") -Instance AudioNoiseFixture -Heartbeat {$script:heartbeats++} -OnResult {param($result);$nativeResults.Add($result)}
     $arguments=[IO.File]::ReadAllLines($argumentFile)
     Assert-Integration ($code -eq 17 -and $script:heartbeats -gt 0 -and $arguments[1] -eq "description O'Brien 日本語" -and $arguments[2] -eq '-instancename' -and $arguments[3] -eq 'AudioNoiseFixture') 'Native process wait drains output, preserves quoted arguments, publishes heartbeat and returns the actual exit code'
+    Assert-Integration ($nativeResults.Count -eq 1 -and $nativeResults[0].exitCode -eq 17 -and $nativeResults[0].stdout.Length -eq 200000 -and $nativeResults[0].stderr.Length -eq 200000 -and $nativeResults[0].ended.qpc -gt $nativeResults[0].started.qpc -and $nativeResults[0].arguments[1] -eq "description O'Brien 日本語") 'Native evidence callback retains both drained streams, arguments, timing and actual failure code'
     $probe=[pscustomobject]@{endpointName='USB Audio and HID';playbackSnapshot=[pscustomobject]@{data=[pscustomobject]@{outputs=@([pscustomobject]@{isSelectedForProbe=$true;endpointRef='capture-ref'})}}}
     $notice=Get-PlaybackReviewNotice $probe 'USB Audio and HID' 'capture-ref'
     Assert-Integration ($notice.relation -eq 'SameEndpoint' -and $notice.text.Contains('同じ出力') -and $notice.text.Contains('切り替え')) 'Playback notice explicitly warns when the recorded output is reused'

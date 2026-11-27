@@ -34,7 +34,7 @@ function Get-SessionTraceEvidence {
         if($problem){$usb.status=$problem;$audio.status=$problem}
         $probe=@($Session.audioProbes|Where-Object {$_.testId -eq $test.id}|Select-Object -Last 1)
         $coverage=if($state -and $probe.Count){Get-FollowUpCoverage $state $probe[0] $test}else{[pscustomobject]@{status='unavailable'}}
-        [pscustomobject]@{testId=$test.id;traceId=$id;probeId=$test.followUp.probeId;usbRequested=$requested;state=if($state){$state.status}elseif($requested){$problem}else{'NotSelected'};usb=$usb;audioTrace=$audio;recordingStatus=if($probe.Count){$probe[0].status}else{'NotStarted'};coverage=$coverage;targetStatus=$state.target.status;endpointRef=$state.link.endpointRef;targetMissing=@($state.target.missing);scope='Saved means a matching file exists, not that events prove correct operation. ETL inclusion is a separate export choice.'}
+        [pscustomobject]@{testId=$test.id;traceId=$id;probeId=$test.followUp.probeId;usbRequested=$requested;state=if($state){$state.status}elseif($requested){$problem}else{'NotSelected'};usb=$usb;audioTrace=$audio;recordingStatus=if($probe.Count){$probe[0].status}else{'NotStarted'};coverage=$coverage;targetStatus=$state.target.status;endpointRef=$state.link.endpointRef;targetMissing=@($state.target.missing);investigationPhase=$state.investigation.phase;investigationCoverage=$state.investigation.coverage;usbValidation=$state.investigation.usbValidation;nativeFailures=@($state.commands|Where-Object {$_ -and $_.exitCode -ne 0});scope='Saved means a matching file exists, not that events prove correct operation. ETL inclusion is a separate export choice.'}
     })
 }
 function Get-TraceEvidenceText {
@@ -42,6 +42,8 @@ function Get-TraceEvidenceText {
     (@(foreach($row in @($Rows|Where-Object {$_})){
         '試験 '+$row.testId.Substring(0,[Math]::Min(8,$row.testId.Length))+' / USB取得：'+$(if($row.usbRequested){'選択済み'}else{'未選択'})+' / traceId：'+$(if($row.traceId){$row.traceId}else{'なし'})
         'USB：'+(Get-TraceStatusLabel $row.usb.status)+' / usb.etl '+$row.usb.bytes+' bytes ／ Audioトレース：'+(Get-TraceStatusLabel $row.audioTrace.status)+' / trace.etl '+$row.audioTrace.bytes+' bytes ／ 内部録音：'+$row.recordingStatus
+        '追加調査：'+$(if($row.investigationCoverage){$row.investigationPhase+' / 未取得項目 '+@($row.investigationCoverage.unavailableSections|Where-Object {$_}).Count+' / 定期取得 '+$row.investigationCoverage.sampleCount+'回、CPU失敗 '+$row.investigationCoverage.cpuSampleFailures+'回・音声失敗 '+$row.investigationCoverage.audioSampleFailures+'回'}elseif($row.investigationPhase){$row.investigationPhase+'（充足確認は未完了）'}else{'未実施・旧版では対象外'})+' ／ USBイベント検査：'+$(if($row.usbValidation){$row.usbValidation.status+' / '+$row.usbValidation.usbEventsInSample+'件（走査範囲内） / 対象対応 '+$row.usbValidation.targetSelectionStatus}else{'未実施'})
+        if(@($row.nativeFailures|Where-Object {$_}).Count){$nativeError=@($row.nativeFailures)[0];'取得エラー：'+$nativeError.executable+' '+$nativeError.exitHex+' '+(Protect-InvestigationText ($nativeError.stdout+' '+$nativeError.stderr) '' 600)}
         '重複時間：'+$(if($row.coverage.status -eq 'calculated'){[string]$row.coverage.overlapSeconds+'秒（USB×内部録音）、Audio×内部録音 '+$row.coverage.audioTraceOverlapSeconds+'秒、三者 '+$row.coverage.usbAudioRecordingOverlapSeconds+'秒、試験×USB '+$row.coverage.testUsbOverlapSeconds+'秒'}else{'未確定・未取得'})+' ／ 出力との関連：'+$(if($row.targetStatus){$row.targetStatus}else{'未取得'})
     })) -join "`r`n"
 }

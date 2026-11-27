@@ -85,8 +85,14 @@ v0.5以前の`durationSeconds`とUTCの開始終了差が違う場合は両方�
 
 `data/`とexternal-resultsの調査データ・解析結果はGit管理対象外です。公開するのはプログラム・一般化した手順・合成データによるテスト・空フォルダー用ファイルだけです。
 
-## 開発版0.9.1-devのUSB取得確認
+## 開発版0.10.0-devのUSB取得確認
 
 bundle.jsonの`traceDataIncluded`は従来互換の書き出し設定値です。実ETLは`traceFileCount`と`files`で確認し、`traceEvidence`で試験ID・USB／Audio／内部録音の別状態、存在・サイズ、欠落、重複時間を照合します。未作成の失敗録音は`missingFiles`へ記載します。開始なしの記録でもZIPを持ち帰れます。
 
 trace.jsonの`target`は取得時点の選択出力からUSB物理祖先までの匿名refと一般化したトポロジーです。`endpointRef`を同じセッションの親チェーンへ結合し、ETLの初期状態イベントから解析時に対象を選びます。欠落や複数候補は推測で埋めません。`Export-UsbTraceEvents.ps1`の出力は新しいanalysisフォルダーへ保存し、原本のセッション・ETLは書き換えません。詳細と時刻基準は[USB追加調査](usb-follow-up.md)を参照してください。
+
+## 0.10.0-devの詳細調査ファイル
+
+USB付き調査の`trace.json.investigation.files`に、前後情報・サンプル・関連イベント・仮説一覧・USB検査・プロバイダー設定/定義のパス、サイズ、ハッシュを保存します。これらの既知の追加診断ファイルは通常ZIPと記録再開でも保持します。ETLの同梱は別の選択です。詳細なファイル名と収集上限は[詳細調査](deep-investigation.md)を参照してください。`commands`には10進/16進終了コード・引数・出力と時刻があり、パス等は伏せ字化します。USB開始に失敗しても、作成できた前後情報と失敗理由を残します。
+
+内部録音の`referenceComparison`は比較区間のサンプル一致で、物理出力の正常判定ではありません。`capture.streamTiming`はドライバー報告のクロック・バッファー・パケット時刻です。100ns換算済みQPCと生QPCを混同せず、元の基準音・実音・ETLと併せて解析してください。

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -113,22 +113,50 @@ namespace AudioNoiseDiagnostics {
         }
         internal static void Release(object value) { if (value!=null && Marshal.IsComObject(value)) Marshal.ReleaseComObject(value); }
     }
+    [ComImport,Guid("CD63314F-3FBA-4a1b-812C-EF96358728E7"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IAudioClock {
+        [PreserveSig] int GetFrequency(out ulong frequency);
+        [PreserveSig] int GetPosition(out ulong position,out ulong qpc100ns);
+        [PreserveSig] int GetCharacteristics(out uint characteristics);
+    }
+    public class RenderClockSample {
+        public ulong DevicePosition, ClockQpc100ns;
+        public long QueryStartedQpc, QueryEndedQpc, SubmittedFrames;
+        public uint PaddingFrames;
+        public int Result;
+    }
+    public class CaptureTimingSample {
+        public ulong DeviceFramePosition, PacketQpc100ns;
+        public long ObservedQpc, WrittenFrames;
+        public uint PacketFrames, Flags;
+    }
     internal sealed class WaveRenderer : IDisposable {
         [StructLayout(LayoutKind.Explicit)] struct FloatBits { [FieldOffset(0)] public float Single; [FieldOffset(0)] public double Double; [FieldOffset(0)] public long Bits; }
         object enumerator; IDevice device; IAudioClient client; IRenderClient render; IntPtr formatPointer;
         WaveFormat mix; WaveData source; double position; bool loop; uint bufferSize;
+        IAudioClock audioClock;bool timing;long lastClockSample;
+        internal ulong ClockFrequency;internal string ClockError;
+        internal readonly List<RenderClockSample> ClockSamples=new List<RenderClockSample>();
+        internal uint BufferFrames { get {return bufferSize;} }
         internal bool Exhausted; internal long SubmittedFrames; internal int OutputRate;
-        internal WaveRenderer(string endpointId,string file,bool loop) {
+        internal WaveRenderer(string endpointId,string file,bool loop,bool timing=false) {
             try {
-                this.loop=loop; source=WaveData.Load(file); device=NativeAudio.Device(endpointId,out enumerator); client=NativeAudio.Client(device);
+                this.loop=loop;this.timing=timing; source=WaveData.Load(file); device=NativeAudio.Device(endpointId,out enumerator); client=NativeAudio.Client(device);
                 Marshal.ThrowExceptionForHR(client.GetMixFormat(out formatPointer)); mix=WaveFormat.FromPointer(formatPointer); OutputRate=mix.Rate;
                 Guid session=Guid.Empty; Marshal.ThrowExceptionForHR(client.Initialize(0,0,1000000,0,formatPointer,ref session));
                 object service; Guid iid=typeof(IRenderClient).GUID; Marshal.ThrowExceptionForHR(client.GetService(ref iid,out service)); render=(IRenderClient)service;
-                Marshal.ThrowExceptionForHR(client.GetBufferSize(out bufferSize)); Pump(); Marshal.ThrowExceptionForHR(client.Start());
+                Marshal.ThrowExceptionForHR(client.GetBufferSize(out bufferSize));
+                if(timing){try{object clockService;Guid clockId=typeof(IAudioClock).GUID;Marshal.ThrowExceptionForHR(client.GetService(ref clockId,out clockService));audioClock=(IAudioClock)clockService;Marshal.ThrowExceptionForHR(audioClock.GetFrequency(out ClockFrequency));}catch(Exception e){ClockError="0x"+e.HResult.ToString("X8");}}
+                Pump(); Marshal.ThrowExceptionForHR(client.Start());
             } catch { Dispose(); throw; }
         }
         internal bool Pump() {
             uint padding; Marshal.ThrowExceptionForHR(client.GetCurrentPadding(out padding));
+            if(timing && audioClock!=null && ClockSamples.Count<4096 && Stopwatch.GetTimestamp()-lastClockSample>=Stopwatch.Frequency/10){
+                long before=Stopwatch.GetTimestamp();ulong devicePosition,qpc100ns;int result=audioClock.GetPosition(out devicePosition,out qpc100ns);long after=Stopwatch.GetTimestamp();
+                ClockSamples.Add(new RenderClockSample {DevicePosition=devicePosition,ClockQpc100ns=qpc100ns,QueryStartedQpc=before,QueryEndedQpc=after,SubmittedFrames=SubmittedFrames,PaddingFrames=padding,Result=result});lastClockSample=after;
+                if(result<0)ClockError="0x"+result.ToString("X8");
+            }
             if (Exhausted) return padding>0;
             uint available=bufferSize-padding; if (available==0) return true;
             if (!loop) available=(uint)Math.Min(available,Math.Ceiling((source.Frames-position)*mix.Rate/source.Format.Rate));
@@ -161,33 +189,40 @@ namespace AudioNoiseDiagnostics {
         }
         public void Dispose() {
             if (client!=null) { try { client.Stop(); } catch { } }
-            NativeAudio.Release(render); NativeAudio.Release(client); NativeAudio.Release(device); NativeAudio.Release(enumerator);
+            NativeAudio.Release(audioClock);audioClock=null;NativeAudio.Release(render); NativeAudio.Release(client); NativeAudio.Release(device); NativeAudio.Release(enumerator);
             render=null; client=null; device=null; enumerator=null;
             if (formatPointer!=IntPtr.Zero) { Marshal.FreeCoTaskMem(formatPointer); formatPointer=IntPtr.Zero; }
         }
     }
     public class PacketFlag { public double OffsetSeconds; public uint Flags; public ulong DeviceFramePosition; }
     public sealed class AudioProbe : IDisposable {
-        readonly string endpointId,path,reference,renderEndpointId; readonly bool loopback; readonly int maxSeconds; readonly Thread thread;
+        readonly string endpointId,path,reference,renderEndpointId; readonly bool loopback,collectTiming; readonly int maxSeconds; readonly Thread thread;
         volatile bool stop; public volatile bool Finished; public volatile string Status="Starting";
         public string ErrorCode; public string StartedUtc,EndedUtc; public int SampleRate,Channels,Bits;
         public long CapturedFrames,WrittenFrames,InsertedSilenceFrames,PacketCount,Discontinuities,TimestampErrors;
         public long StartedQpc,EndedQpc; public long QpcFrequency=Stopwatch.Frequency;
         public double ElapsedSeconds,ReferenceStartOffsetSeconds; public bool SizeLimitReached;
+        public bool TimingRequested {get {return collectTiming;}}
+        public ulong RenderClockFrequency;public string RenderClockError;public uint RenderBufferFrames;public long RenderSubmittedFrames;
+        public RenderClockSample[] RenderClockSamples=new RenderClockSample[0];
+        public double? ReportedRenderRateRatio;public int RenderClockRegressions;
+        readonly List<CaptureTimingSample> timings=new List<CaptureTimingSample>();
+        public CaptureTimingSample[] CaptureTimingSamples {get {lock(timings){return timings.ToArray();}}}
         readonly List<PacketFlag> flags=new List<PacketFlag>();
         public PacketFlag[] FlagEvents { get { lock(flags) { return flags.ToArray(); } } }
         public static AudioProbe Start(string endpointId,string path,string reference,int maxSeconds) { return new AudioProbe(endpointId,endpointId,path,reference,maxSeconds,true); }
+        public static AudioProbe Start(string endpointId,string path,string reference,int maxSeconds,bool collectTiming) { return new AudioProbe(endpointId,endpointId,path,reference,maxSeconds,true,collectTiming); }
         public static AudioProbe StartMicrophone(string inputId,string outputId,string path,string reference,int maxSeconds) { return new AudioProbe(inputId,outputId,path,reference,maxSeconds,false); }
-        AudioProbe(string endpointId,string renderEndpointId,string path,string reference,int maxSeconds,bool loopback) {
+        AudioProbe(string endpointId,string renderEndpointId,string path,string reference,int maxSeconds,bool loopback,bool collectTiming=false) {
             if (maxSeconds<1||maxSeconds>300) throw new ArgumentOutOfRangeException("maxSeconds");
-            this.endpointId=endpointId;this.renderEndpointId=renderEndpointId;this.path=path;this.reference=reference;this.maxSeconds=maxSeconds;this.loopback=loopback;
+            this.endpointId=endpointId;this.renderEndpointId=renderEndpointId;this.path=path;this.reference=reference;this.maxSeconds=maxSeconds;this.loopback=loopback;this.collectTiming=collectTiming;
             thread=new Thread(Run);thread.IsBackground=true;thread.SetApartmentState(ApartmentState.STA);thread.Start();
         }
         public void Stop() { stop=true; }
         public void Dispose() { Stop(); if (!thread.Join(5000)) throw new TimeoutException("Audio recording did not stop."); }
         void Run() {
             object enumerator=null; IDevice device=null; IAudioClient client=null; ICaptureClient capture=null; IntPtr pointer=IntPtr.Zero; WaveSink sink=null; WaveRenderer renderer=null;
-            var clock=new Stopwatch();
+            var clock=new Stopwatch();double lastPacketTiming=-1;
             try {
                 device=NativeAudio.Device(endpointId,out enumerator); client=NativeAudio.Client(device);
                 Marshal.ThrowExceptionForHR(client.GetMixFormat(out pointer)); var mix=WaveFormat.FromPointer(pointer);
@@ -197,7 +232,7 @@ namespace AudioNoiseDiagnostics {
                 sink=new WaveSink(path,mix); Marshal.ThrowExceptionForHR(client.Start());
                 StartedQpc=Stopwatch.GetTimestamp();double startQpc=(double)StartedQpc/Stopwatch.Frequency;
                 StartedUtc=DateTime.UtcNow.ToString("o");clock.Start();Status="Recording";
-                if (!String.IsNullOrEmpty(reference)) { ReferenceStartOffsetSeconds=clock.Elapsed.TotalSeconds; renderer=new WaveRenderer(renderEndpointId,reference,true); }
+                if (!String.IsNullOrEmpty(reference)) { ReferenceStartOffsetSeconds=clock.Elapsed.TotalSeconds; renderer=new WaveRenderer(renderEndpointId,reference,true,collectTiming); }
                 long maximumFrames=268435456/mix.Align;
                 while (!stop && clock.Elapsed.TotalSeconds<maxSeconds && sink.Frames<maximumFrames) {
                     uint packet;Marshal.ThrowExceptionForHR(capture.GetNextPacketSize(out packet));
@@ -206,6 +241,7 @@ namespace AudioNoiseDiagnostics {
                         Marshal.ThrowExceptionForHR(capture.GetBuffer(out data,out frames,out packetFlags,out devicePosition,out qpc));
                         try {
                             if (frames==0) break;
+                            if(collectTiming && (clock.Elapsed.TotalSeconds-lastPacketTiming>=0.1 || (packetFlags&5)!=0)) {lock(timings){if(timings.Count<4096)timings.Add(new CaptureTimingSample {DeviceFramePosition=devicePosition,PacketQpc100ns=qpc,ObservedQpc=Stopwatch.GetTimestamp(),WrittenFrames=sink.Frames,PacketFrames=frames,Flags=packetFlags});}lastPacketTiming=clock.Elapsed.TotalSeconds;}
                             if ((packetFlags&1)!=0) Discontinuities++;
                             if ((packetFlags&4)!=0) TimestampErrors++;
                             if ((packetFlags&5)!=0) { lock(flags) { if(flags.Count<1000) flags.Add(new PacketFlag { OffsetSeconds=clock.Elapsed.TotalSeconds,Flags=packetFlags,DeviceFramePosition=devicePosition }); } }
@@ -231,7 +267,13 @@ namespace AudioNoiseDiagnostics {
                 Status=CapturedFrames==0 ? "NoAudioData" : "Completed";
             } catch(Exception e) { ErrorCode="0x"+e.HResult.ToString("X8");Status="Failed"; }
             finally {
-                if(renderer!=null) renderer.Dispose();if(client!=null) { try {client.Stop();} catch {} }
+                if(renderer!=null) {
+                    RenderClockFrequency=renderer.ClockFrequency;RenderClockError=renderer.ClockError;RenderBufferFrames=renderer.BufferFrames;RenderSubmittedFrames=renderer.SubmittedFrames;RenderClockSamples=renderer.ClockSamples.ToArray();
+                    RenderClockSample first=null,last=null;
+                    foreach(var sample in RenderClockSamples){if(sample.Result==0&&sample.DevicePosition>0&&sample.ClockQpc100ns>0){if(last!=null&&sample.DevicePosition<last.DevicePosition)RenderClockRegressions++;if(first==null)first=sample;last=sample;}}
+                    if(first!=null&&last!=null&&RenderClockFrequency>0&&last.DevicePosition>first.DevicePosition&&last.ClockQpc100ns>first.ClockQpc100ns&&RenderClockRegressions==0)ReportedRenderRateRatio=((last.DevicePosition-first.DevicePosition)/(double)RenderClockFrequency)/((last.ClockQpc100ns-first.ClockQpc100ns)/10000000.0);
+                    renderer.Dispose();
+                }if(client!=null) { try {client.Stop();} catch {} }
                 if(sink!=null) { try {sink.Dispose();} catch(Exception e) { ErrorCode="0x"+e.HResult.ToString("X8");Status="Failed"; } }
                 if(pointer!=IntPtr.Zero) Marshal.FreeCoTaskMem(pointer);
                 NativeAudio.Release(capture);NativeAudio.Release(client);NativeAudio.Release(device);NativeAudio.Release(enumerator);
@@ -253,7 +295,35 @@ namespace AudioNoiseDiagnostics {
         public void Stop() { stop=true; }
         public void Dispose() {Stop();if(!thread.Join(5000))throw new TimeoutException("Playback did not stop.");}
     }
+    public class ReferenceComparison {
+        public string Status;
+        public int OffsetFrames, SampleRate, Channels;
+        public long ComparedFrames, DifferentSamples;
+        public double MaximumDifference, ComparedSeconds;
+        public string Scope="First nonzero onset alignment; compares the subsequent repeated reference at equal rate/channels. Differences can be misalignment, level/effects, other audio or stream changes, not automatically audible noise. Sample equality does not prove the physical output is clean.";
+    }
     public static class AudioFiles {
+        public static ReferenceComparison CompareReference(string recording,string reference) {
+            var result=new ReferenceComparison();
+            var actual=WaveData.Load(recording);var expected=WaveData.Load(reference);
+            result.SampleRate=actual.Format.Rate;result.Channels=actual.Format.Channels;
+            if(actual.Format.Rate!=expected.Format.Rate||actual.Format.Channels!=expected.Format.Channels) {result.Status="DifferentRateOrChannels";return result;}
+            int a=-1,b=-1;
+            for(int i=0;i<Math.Min(actual.Frames,actual.Format.Rate*5)&&a<0;i++)for(int c=0;c<actual.Format.Channels;c++)if(Math.Abs(actual.Sample(i,c))>0.000001){a=i;break;}
+            for(int i=0;i<Math.Min(expected.Frames,expected.Format.Rate*5)&&b<0;i++)for(int c=0;c<expected.Format.Channels;c++)if(Math.Abs(expected.Sample(i,c))>0.000001){b=i;break;}
+            if(a<0||b<0||expected.Frames==0){result.Status="NoReferenceOnset";return result;}
+            result.OffsetFrames=a-b;
+            int first=Math.Max(0,result.OffsetFrames);
+            for(int i=first;i<actual.Frames;i++)for(int c=0;c<actual.Format.Channels;c++) {
+                int frame=(i-result.OffsetFrames)%expected.Frames;
+                double difference=Math.Abs(actual.Sample(i,c)-expected.Sample(frame,c));
+                if(difference!=0)result.DifferentSamples++;
+                result.MaximumDifference=Math.Max(result.MaximumDifference,difference);
+            }
+            result.ComparedFrames=actual.Frames-first;result.ComparedSeconds=result.ComparedFrames/(double)actual.Format.Rate;
+            result.Status=result.ComparedSeconds<5?"TooShort":result.DifferentSamples==0?"SampleExactInComparedRegion":"DifferentOrUnaligned";
+            return result;
+        }
         [DllImport("ole32.dll")] static extern int PropVariantClear(ref PropertyValue value);
         static string DeviceName(IDevice device,string fallback) {
             IntPtr raw=IntPtr.Zero;IPropertyStore store=null;

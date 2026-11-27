@@ -95,7 +95,7 @@ function Start-ObservationCapture {
             }else{[AudioNoiseDiagnostics.AudioFiles]::GenerateReference($referencePath)}
         }
         if($probe.sourceKind -eq 'Microphone'){$script:audioRecorder=[AudioNoiseDiagnostics.AudioProbe]::StartMicrophone($audioInput.SelectedItem.Id,$audioOutput.SelectedItem.Id,$path,$referencePath,$probe.maximumSeconds)}
-        else{$script:audioRecorder=[AudioNoiseDiagnostics.AudioProbe]::Start($audioOutput.SelectedItem.Id,$path,$referencePath,$probe.maximumSeconds)}
+        else{$script:audioRecorder=[AudioNoiseDiagnostics.AudioProbe]::Start($audioOutput.SelectedItem.Id,$path,$referencePath,$probe.maximumSeconds,($script:activeTest.followUp.kind -eq 'UsbTransfer'))}
     }catch{$probe.status='Failed';Save-CurrentSession;Refresh-AudioRecords;throw}
 }
 function Poll-AudioJobs {

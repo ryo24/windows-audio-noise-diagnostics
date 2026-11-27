@@ -50,7 +50,7 @@ $settingsLayout=New-Object Windows.Forms.TableLayoutPanel;$settingsLayout.Dock='
 [void]$settingsLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',52)))
 [void]$settingsLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100)));[void]$settingsLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',52)))
 $usbPreset=New-UiButton 'ノイズ発生中：USB＋Audioの設定へ';$settingsLayout.Controls.Add($usbPreset,0,0)
-$usbPreset.Add_Click({$followUpChoice.SelectedIndex=1;$audioMode.SelectedIndex=0;$audioSource.SelectedIndex=0;$audioLength.SelectedItem='30';$settingsTabs.SelectedTab=$followUpTab;$tabs.SelectedTab=$settingsPage;Update-UiState})
+$usbPreset.Add_Click({$followUpChoice.SelectedIndex=1;$audioMode.SelectedIndex=0;$audioSource.SelectedIndex=0;$audioLength.SelectedItem='30';$includeTraces.Checked=$true;$settingsTabs.SelectedTab=$followUpTab;$tabs.SelectedTab=$settingsPage;Update-UiState})
 $settingsTabs=New-Object Windows.Forms.TabControl;$settingsTabs.Dock='Fill';$settingsLayout.Controls.Add($settingsTabs,0,1);$settingsPage.Controls.Add($settingsLayout)
 $audioTab=New-AudioSettingsTab;$testTab=New-UiPage '比較する条件';$btTab=New-UiPage 'Bluetooth（任意）'
 $evidenceTab=New-PlaybackConditionsTab;$followUpTab=New-FollowUpTab
