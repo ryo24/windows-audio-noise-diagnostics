@@ -9,11 +9,17 @@
     $instance='AudioNoise-'+$TraceId
     $traceDirectory=Join-Path (Join-Path $sessionDirectory 'traces') $traceId
     [IO.Directory]::CreateDirectory($traceDirectory)|Out-Null
-    $existingState=Join-Path $traceDirectory 'trace.json'
-    if(Test-Path -LiteralPath $existingState){
-        $existing=Get-Content -LiteralPath $existingState -Raw -Encoding UTF8|ConvertFrom-Json
-        if($existing.status -ne 'Launching' -or $existing.id -ne $traceId -or $existing.sessionId -ne $session.id){throw 'Existing trace data will not be overwritten'}
+    $existing=(Read-TraceStateRecord $traceDirectory -TraceId $TraceId -SessionId $session.id).state
+    if($existing -and $existing.status -ne 'Launching'){throw 'Existing trace data will not be overwritten'}
+    # Claim the run once, including if the writer crashes before its first snapshot.
+    # Retries through the UI receive a new ID and do not reuse ETW instances.
+    $claimPath=Join-Path $traceDirectory 'trace-owner.lock'
+    try{$claim=[IO.File]::Open($claimPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::Read)}
+    catch [IO.IOException] {
+        if([IO.File]::Exists($claimPath)){throw 'A helper has already claimed this trace run'}
+        throw
     }
+    $claim.Dispose()
     $requireCaptureAck=[bool]($IncludeUsb -and $existing.requireCaptureAck)
     if($requireCaptureAck){
         $Seconds=[int]$existing.requestedSeconds
@@ -26,6 +32,9 @@
     $state|Add-Member -NotePropertyName captureHandshake -NotePropertyValue ([pscustomobject]@{
         status=if($requireCaptureAck){'NotReady'}else{'NotRequired'}
         ready=$null;acknowledged=$null;timeoutSeconds=30;readErrors=0
+    })
+    $state|Add-Member -NotePropertyName stateWrites -NotePropertyValue ([pscustomobject]@{
+        sequence=0;writeFailures=0;recoveryWrites=0;lastError=$null
     })
     $state|Add-Member -NotePropertyName startupStage -NotePropertyValue 'Preparing'
     $state|Add-Member -NotePropertyName inspectionStarted -NotePropertyValue $null
@@ -47,8 +56,15 @@
         Save-TraceState
     }
     $state|Add-Member -NotePropertyName usb -NotePropertyValue ([pscustomobject]@{requested=[bool]$IncludeUsb;instanceName=('AudioNoise-USB-'+$TraceId);status='NotRequested';providers=@();started=$null;ended=$null;startExitCode=$null;stopExitCode=$null;bytes=0;sha256=$null;errorType=$null;clock='QPC';maxMegabytes=256;mode='Circular';scope='xHCI/UCX/USBHUB3 stack, including USB 2 devices on xHCI. All devices on these stacks; not filtered to one endpoint. Transfer headers, errors, state machines and rundown; no PartialDataBusTrace or FullDataBusTrace requested. Descriptors and identifiers can be present. Circular events may be overwritten; missing events never prove normality.'})
-    $stateFile=Join-Path $traceDirectory 'trace.json'
-    function Save-TraceState {$state.updated=Get-ClockPoint;Write-AtomicText $stateFile ($state|ConvertTo-Json -Depth 10)}
+    function Save-TraceState {
+        param([switch]$Final)
+        $saved=Write-TraceWorkerState $traceDirectory $state -Final:$Final
+        if($Final -and -not $saved){
+            # Let the UI report a lost final snapshot. The ETL files already saved on disk remain available.
+            $state.status='Failed'
+            $state.errorType='TraceStateWriteFailed'
+        }
+    }
     function Invoke-TraceCommand {
         param([string[]]$Arguments)
         # Preserve bounded, redacted native output in diagnostic command evidence.
@@ -57,7 +73,7 @@
         Invoke-WprProcess -Arguments $Arguments -Instance $instance -Heartbeat {Save-TraceState} -OnResult $nativeEvidence
     }
     function Stop-LinkedUsbTrace {
-        try{Save-TraceState}catch{}
+        Save-TraceState
         Stop-UsbTrace $state.usb $traceDirectory $UsbRunner {Save-TraceState} $nativeEvidence
     }
     $started=$false
@@ -164,7 +180,7 @@
             $state.status='Stopping'
             $state.stopping=Get-ClockPoint
             if($started){$state.audioStatus='Stopping'}
-            try{Save-TraceState}catch{}
+            Save-TraceState
         }
         if($requireCaptureAck -and $state.usb.status -eq 'Recording'){Stop-LinkedUsbTrace}
         if($started){
@@ -213,8 +229,8 @@
                 if($eventSection.status -ne 'collected'){$state.investigation.coverage.unavailableSections+=@('systemEvents')}
                 $state.investigation.phase='Completed'
             }catch{$state.investigation.phase='Partial';$state.investigation.failure=[pscustomobject]@{type=$_.Exception.GetType().Name;hresult=$_.Exception.HResult;message=Protect-InvestigationText $_.Exception.Message $sessionDirectory}}
-            finally{$state.status=$terminalStatus;Save-TraceState}
-        }else{Save-TraceState}
+            finally{$state.status=$terminalStatus;Save-TraceState -Final}
+        }else{Save-TraceState -Final}
     }
     return $state
 

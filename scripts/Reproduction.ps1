@@ -77,10 +77,11 @@ function Get-TraceReportHtml {
     if(-not (Test-Path -LiteralPath $root)){return ''}
     $rows=@(foreach($directory in Get-ChildItem -LiteralPath $root -Directory){
         if($directory.Name -notmatch '^[a-fA-F0-9]{32}$'){continue}
-        $path=Join-Path $directory.FullName 'trace.json'
-        if(Test-Path -LiteralPath $path){
-            Assert-RegularBundleFile $SessionDirectory $path
-            '<details><summary>詳細トレース '+$directory.Name+'</summary><pre>'+(ConvertTo-HtmlText (Get-Content -LiteralPath $path -Raw -Encoding UTF8))+'</pre></details>'
+        try{$record=Read-TraceStateRecord $directory.FullName -SessionDirectory $SessionDirectory}
+        catch{$record=$null}
+        if($record){
+            $summary=$record.state|ConvertTo-Json -Depth 12
+            '<details><summary>詳細トレース '+$directory.Name+'</summary><pre>'+(ConvertTo-HtmlText $summary)+'</pre></details>'
         }
     }) -join "`n"
     '<h2>詳細トレースの取得結果</h2><p>ETLはtraces配下です。WPA等で解析してください。取得失敗・イベント欠落は正常の証明にはなりません。</p>'+$rows

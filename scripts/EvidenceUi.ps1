@@ -41,7 +41,7 @@ function Poll-DetailedTrace {
             if($script:traceProcess.HasExited){$processState='Exited';$run.processExitCode=$script:traceProcess.ExitCode}else{$processState='Running'}
         }catch{$processState='Unknown'}
     }
-    try {$state=Read-TraceRunState $run;if($state){$run.state=$state}}catch{$readError=$_.Exception.GetType().Name}
+    try {$state=Read-TraceRunState $run;if($state -and -not ($state.status -eq 'Launching' -and $run.state.status -in @('LaunchFailed','Cancelled'))){$run.state=$state}}catch{$readError=$_.Exception.GetType().Name}
     $script:tracePresentation=Get-TracePresentation $run $run.state $processState -ReadError $readError
     $run.phase=$script:tracePresentation.phase;$run.busy=$script:tracePresentation.busy
     if($script:activeTest.followUp.captureStage -eq 'AwaitingTrace' -and $run.state.link.testId -eq $script:activeTest.id -and -not $script:finishRequested){
@@ -64,17 +64,10 @@ function Poll-DetailedTrace {
         if($script:activeTest.followUp.captureStage -in @('StartingAudio','Started') -and $run.state.link.testId -eq $script:activeTest.id -and -not $script:finishRequested){$script:activeTest.followUp.captureStage='TraceEnded';Request-ObservationFinish}
     }
     if(-not $run.busy){
-        if($script:tracePresentation.phase -eq 'Failed' -and $run.state.status -eq 'Completed'){
-            $run.state|Add-Member -NotePropertyName lastWorkerStatus -NotePropertyValue 'Completed' -Force
-            $run.state.status='Failed';$run.state|Add-Member -NotePropertyName errorType -NotePropertyValue 'SavedArtifactMismatch' -Force
-            Write-AtomicText (Join-Path $run.directory 'trace.json') ($run.state|ConvertTo-Json -Depth 12)
-        }
         if($processState -eq 'Exited' -and $run.state.status -in @('Launching','Starting','AwaitingCapture','Recording','Stopping','Inspecting')){
-            $run.state|Add-Member -NotePropertyName lastWorkerStatus -NotePropertyValue $run.state.status -Force
-            $run.state.status='HelperExited'
-            $run.state|Add-Member -NotePropertyName errorType -NotePropertyValue 'NoFinalState' -Force
-            $run.state|Add-Member -NotePropertyName helperExitCode -NotePropertyValue $run.processExitCode -Force
-            Write-AtomicText (Join-Path $run.directory 'trace.json') ($run.state|ConvertTo-Json -Depth 12)
+            $errorType=if($run.processExitCode -eq 3){'TraceStateWriteFailed'}else{'NoFinalState'}
+            try{Set-TraceUiOutcome $run 'HelperExited' $errorType}
+            catch{$script:tracePresentation.text+=' 終了の状態もファイルに記録できませんでした。'}
         }
         $run.terminalHandled=$true
         if($script:traceProcess){$script:traceProcess.Dispose();$script:traceProcess=$null}
@@ -122,22 +115,26 @@ function New-TraceTab {
 
 function Start-LinkedTrace {
     param([switch]$IncludeUsb,$Link=$null)
+    if(Test-DetailedTraceBusy){return}
+    $run=$null
     try{
-        if(Test-DetailedTraceBusy){throw '前の詳細トレースの保存を待ってください。'}
         Save-CurrentSession
-        $script:traceRun=New-TraceRun $script:sessionDirectory $script:session.id -IncludeUsb:$IncludeUsb -Link $Link -RequireCaptureAck:$IncludeUsb -CaptureSeconds $(if($IncludeUsb){$script:recordingProbe.maximumSeconds}else{60})
+        $run=New-TraceRun $script:sessionDirectory $script:session.id -IncludeUsb:$IncludeUsb -Link $Link -RequireCaptureAck:$IncludeUsb -CaptureSeconds $(if($IncludeUsb){$script:recordingProbe.maximumSeconds}else{60})
+        $script:traceRun=$run
         if($IncludeUsb){
             $script:activeTest.followUp.traceId=$script:traceRun.id
             Save-CurrentSession
         }
         $script:tracePresentation=Get-TracePresentation $script:traceRun $script:traceRun.state
         Update-UiState;[Windows.Forms.Application]::DoEvents()
-        if($script:traceRun.stopRequested){$script:traceRun.state.status='Cancelled';Write-AtomicText (Join-Path $script:traceRun.directory 'trace.json') ($script:traceRun.state|ConvertTo-Json -Depth 8);Poll-DetailedTrace;return}
+        if($script:traceRun.stopRequested){Set-TraceUiOutcome $script:traceRun 'Cancelled' '';Poll-DetailedTrace;return}
         $script:traceProcess=Start-TraceHelper $script:traceRun
     }catch{
-        if($script:traceRun){
-            $state=$script:traceRun.state;$state.status='LaunchFailed';$state.errorType=if($_.Exception.NativeErrorCode -eq 1223){'AdminApprovalCancelled'}else{$_.Exception.GetType().Name}
-            Write-AtomicText (Join-Path $script:traceRun.directory 'trace.json') ($state|ConvertTo-Json -Depth 8);Poll-DetailedTrace
+        if($run){
+            $errorType=if($_.Exception.NativeErrorCode -eq 1223){'AdminApprovalCancelled'}else{$_.Exception.GetType().Name}
+            try{Set-TraceUiOutcome $run 'LaunchFailed' $errorType}
+            catch{$status.Text='トレースを起動できず、終了状態の書き込みにも失敗しました。'}
+            Poll-DetailedTrace
         }else{Show-UiError $_.Exception.Message}
         return
     }
