@@ -115,10 +115,12 @@ function New-TraceTab {
 
 function Start-LinkedTrace {
     param([switch]$IncludeUsb,$Link=$null)
+    if(Test-DetailedTraceBusy){return}
+    $run=$null
     try{
-        if(Test-DetailedTraceBusy){throw '前の詳細トレースの保存を待ってください。'}
         Save-CurrentSession
-        $script:traceRun=New-TraceRun $script:sessionDirectory $script:session.id -IncludeUsb:$IncludeUsb -Link $Link -RequireCaptureAck:$IncludeUsb -CaptureSeconds $(if($IncludeUsb){$script:recordingProbe.maximumSeconds}else{60})
+        $run=New-TraceRun $script:sessionDirectory $script:session.id -IncludeUsb:$IncludeUsb -Link $Link -RequireCaptureAck:$IncludeUsb -CaptureSeconds $(if($IncludeUsb){$script:recordingProbe.maximumSeconds}else{60})
+        $script:traceRun=$run
         if($IncludeUsb){
             $script:activeTest.followUp.traceId=$script:traceRun.id
             Save-CurrentSession
@@ -128,9 +130,9 @@ function Start-LinkedTrace {
         if($script:traceRun.stopRequested){Set-TraceUiOutcome $script:traceRun 'Cancelled' '';Poll-DetailedTrace;return}
         $script:traceProcess=Start-TraceHelper $script:traceRun
     }catch{
-        if($script:traceRun){
+        if($run){
             $errorType=if($_.Exception.NativeErrorCode -eq 1223){'AdminApprovalCancelled'}else{$_.Exception.GetType().Name}
-            try{Set-TraceUiOutcome $script:traceRun 'LaunchFailed' $errorType}
+            try{Set-TraceUiOutcome $run 'LaunchFailed' $errorType}
             catch{$status.Text='トレースを起動できず、終了状態の書き込みにも失敗しました。'}
             Poll-DetailedTrace
         }else{Show-UiError $_.Exception.Message}

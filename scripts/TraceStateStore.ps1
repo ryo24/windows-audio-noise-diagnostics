@@ -35,7 +35,8 @@ function Read-TraceStateRecord {
         }catch{$readError=$_}
     }
     if($newest.state.status -in @('Completed','Failed','StopFailed','Cancelled')){return $newest}
-    if($ui){return $ui}
+    # A live worker is stronger evidence than an ambiguous launch error.
+    if($ui -and ($ui.state.status -eq 'HelperExited' -or $newest.state.status -in @($null,'Launching'))){return $ui}
     if($newest){return $newest}
     if($readError){throw $readError}
 }

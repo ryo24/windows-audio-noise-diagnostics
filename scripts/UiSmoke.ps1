@@ -159,6 +159,10 @@ if($exercise){
         $prior=Join-Path (Join-Path $script:sessionDirectory 'traces') ([guid]::NewGuid().ToString('N'));[IO.Directory]::CreateDirectory($prior)|Out-Null
         $script:fakeTraceHoldStart=$true;$traceStart.PerformClick()
         Assert-Ui ((Test-DetailedTraceBusy) -and -not $traceStart.Enabled -and $script:traceRun.id) 'WPR launch must reserve the run directory before a helper is ready.'
+        $originalRun=$script:traceRun
+        Start-LinkedTrace
+        Assert-Ui ($script:traceRun.id -eq $originalRun.id -and $script:traceRun.state.status -eq 'Launching' -and
+            -not (Test-Path -LiteralPath (Join-Path $originalRun.directory 'trace-ui.json'))) 'A duplicate start request must leave the active run and its state untouched.'
         $traceStop.PerformClick()
         Assert-Ui ($script:traceRun.stopRequested -and -not $traceStop.Enabled -and (Test-Path -LiteralPath (Join-Path $script:traceRun.directory 'stop.request'))) 'An immediate stop must persist and disable duplicate stop requests.'
         Assert-Ui (-not (Test-Path -LiteralPath (Join-Path $prior 'stop.request'))) 'Stopping must not alter historical trace directories.'
