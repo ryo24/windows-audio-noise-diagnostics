@@ -58,9 +58,22 @@ if($exercise){
         Save-UiProof 'follow-up-settings';$settingsNext.PerformClick();$start.PerformClick()
         Assert-Ui ($script:activeTest -and -not $script:audioRecorder -and (Test-DetailedTraceBusy) -and -not $mark.Enabled) 'One common start must wait for USB/Audio readiness before sound, recording and markers.'
         Save-UiProof 'usb-awaiting'
+        # Keep Windows message dispatch alive but deliberately delay consumption
+        # of trace readiness beyond the normal 500 ms polling interval.
+        $timer.Stop()
+        try{
+            Wait-Ui {try{(Read-TraceRunState $script:traceRun).status -eq 'AwaitingCapture'}catch{$false}} 20
+            Start-Sleep -Milliseconds 1600
+            $waiting=Read-TraceRunState $script:traceRun
+            Assert-Ui ($waiting.status -eq 'AwaitingCapture' -and $waiting.captureHandshake.status -eq 'Waiting' -and
+                $waiting.usb.status -eq 'Recording' -and $waiting.audioStatus -eq 'Recording' -and
+                -not $script:audioRecorder -and -not $mark.Enabled) 'The helper must hold readiness independently of the trace duration until delayed UI polling begins audio.'
+        }finally{$timer.Start()}
         Wait-Ui {$script:traceRun.phase -eq 'Recording' -and $script:activeTest.followUp.captureStage -eq 'Started'} 25
         $linkedTest=$script:activeTest;$linkedProbe=$script:recordingProbe
         Assert-Ui ($linkedTest.followUp.traceId -eq $script:traceRun.id -and $script:traceRun.state.link.testId -eq $linkedTest.id -and $script:traceRun.state.link.probeId -eq $linkedProbe.id) 'Trace, probe and comparison must be linked by IDs.'
+        Assert-Ui ($script:traceRun.state.captureHandshake.status -eq 'Acknowledged' -and $script:traceRun.state.requestedSeconds -eq 30 -and
+            $script:traceRun.state.captureHandshake.acknowledged.qpc -eq $linkedTest.followUp.simultaneousConfirmed.qpc) 'The independent helper must accept the matching QPC handshake before starting the configured capture timer.'
         Assert-Ui ($linkedProbe.referenceId -like '*v2-indexed*' -and $linkedProbe.selectedOutputFormat.status -eq 'collected') 'Follow-up must use indexed sound and the actual selected output format.'
         Assert-Ui (@($script:session.timeline|Where-Object kind -eq 'UsbAudioReady').Count -eq 1 -and @($script:session.timeline|Where-Object kind -eq 'SimultaneousCaptureConfirmed').Count -eq 1 -and $mark.Enabled) 'Readiness and simultaneous confirmation must be distinct recorded points.'
         Save-UiProof 'follow-up-recording';$mark.PerformClick();$finish.PerformClick()
@@ -105,10 +118,22 @@ if($exercise){
         Wait-Ui {-not $script:activeTest -and -not $script:worker -and -not $script:bluetoothMonitor -and -not (Test-DetailedTraceBusy)}
         $saveFailed=@(Get-SessionTraceEvidence $script:session $script:sessionDirectory)[-1]
         Assert-Ui ($saveFailed.usb.status -eq 'SaveFailed' -and $saveFailed.audioTrace.status -eq 'Saved') 'USB save failure must remain distinct from saved Audio and internal recording.'
+        $script:failUsbSave=$false;$tabs.SelectedTab=$runPage;$start.PerformClick()
+        $timer.Stop()
+        try{
+            Wait-Ui {try{(Read-TraceRunState $script:traceRun).status -eq 'AwaitingCapture'}catch{$false}} 20
+            $finish.PerformClick()
+            Assert-Ui (-not $script:audioRecorder -and $script:recordingProbe.status -eq 'NotStarted') 'Finishing before consuming readiness must never start late playback.'
+        }finally{$timer.Start()}
+        Wait-Ui {-not $script:activeTest -and -not $script:worker -and -not $script:bluetoothMonitor -and -not (Test-DetailedTraceBusy)}
+        $stopped=@(Get-SessionTraceEvidence $script:session $script:sessionDirectory)[-1]
+        Assert-Ui ($stopped.usb.status -eq 'Saved' -and $stopped.audioTrace.status -eq 'Saved' -and
+            $stopped.stopReason -eq 'RequestedDuringStartup' -and $stopped.captureHandshake.status -eq 'Stopped' -and
+            $script:session.tests[-1].result -eq 'Inconclusive') 'Early finish must preserve both started ETLs with an explicit stopped handshake and inconclusive audio.'
         $tabs.SelectedTab=$reviewPage;$reviewTabs.SelectedTab=$traceResultsTab;Save-UiProof 'usb-results'
         $tabs.SelectedTab=$exportPage;$includeTraces.Checked=$true;$export.PerformClick()
         $bundle=(Test-DiagnosticBundle $script:lastExport).manifest
-        Assert-Ui ($bundle.traceEvidence.Count -eq 4 -and $bundle.traceFileCount -eq 3 -and $bundle.missingFiles.Count -eq 4) 'A ZIP must retain all success/failure test links, only real ETLs and explicit missing files.'
+        Assert-Ui ($bundle.traceEvidence.Count -eq 5 -and $bundle.traceFileCount -eq 5 -and $bundle.missingFiles.Count -eq 6) 'A ZIP must retain all success/failure test links, only real ETLs and explicit missing files.'
         $form.Close();Write-Output 'UI USB readiness, shared lifecycle, cancellation, start/save failures, physical linkage and honest ZIP contents OK'
     }elseif($ExerciseTraceWorkflow){
         function Start-TraceHelper {

@@ -215,8 +215,6 @@ $start.Add_Click({
             $test.followUp|Add-Member -NotePropertyName captureStage -NotePropertyValue 'AwaitingTrace' -Force
             $link=[pscustomobject]@{testId=$test.id;probeId=$script:recordingProbe.id;endpointRef=(Get-AnonymousDeviceRef ('SWD\MMDEVAPI\'+$audioOutput.SelectedItem.Id) $script:session.id)}
             Start-LinkedTrace -IncludeUsb -Link $link
-            $test.followUp.traceId=$script:traceRun.id
-            Save-CurrentSession
         }
         $script:contextTest=$test;Start-CollectionWorker 'context'
         $tabs.SelectedTab=$runPage
@@ -269,8 +267,17 @@ $timer.Add_Tick({
     if ($script:activeTest) {
         Update-TestDuration $script:activeTest
         $seconds=[int]$script:activeTest.durationSeconds
-        $elapsed.Text=('{0:00}:{1:00} / ノイズ {2} 回' -f [int][Math]::Floor($seconds/60),($seconds%60),@($script:activeTest.noiseUtc).Count)
-        if ($seconds -ge 600) { $status.Text='10分経過しました。「終了して結果を記録」で終了できます。' }
+        $clockLabel=''
+        if($script:activeTest.followUp.kind -eq 'UsbTransfer'){
+            if($script:activeTest.followUp.simultaneousConfirmed){
+                $point=if($script:activeTest.timing.end){$script:activeTest.timing.end}else{Get-ClockPoint}
+                $seconds=Get-TraceAgeSeconds $script:activeTest.followUp.simultaneousConfirmed $point
+                $clockLabel='録音 '
+            }else{$clockLabel=if($script:finishRequested){'録音なし ／ 準備 '}else{'準備 '}}
+        }
+        $elapsedText=($clockLabel+'{0:00}:{1:00} / ノイズ {2} 回' -f [int][Math]::Floor($seconds/60),($seconds%60),@($script:activeTest.noiseUtc).Count)
+        if($elapsed.Text -ne $elapsedText){$elapsed.Text=$elapsedText}
+        if ($seconds -ge 600 -and $script:activeTest.followUp.kind -ne 'UsbTransfer') { $status.Text='10分経過しました。「終了して結果を記録」で終了できます。' }
     }
     if ($script:worker -and $script:workerHandle.IsCompleted) {
         try {

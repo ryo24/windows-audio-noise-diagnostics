@@ -67,6 +67,12 @@ try {
         $script:failNativeStart=$false;$script:failEventRead=$true
         $readFailed=Invoke-DetailedTrace -SessionPath (Join-Path $sessionDir 'session.json') -Seconds 1 -IncludeUsb
         Assert-Investigation ($readFailed.usb.status -eq 'Completed' -and $readFailed.investigation.usbValidation.status -eq 'ReadFailed') 'Saved file and failed event inspection remain separate findings'
+        $script:failEventRead=$false
+        $waitingRun=New-TraceRun $sessionDir $session.id -IncludeUsb -RequireCaptureAck -CaptureSeconds 30 -Link $run.state.link
+        $timedOut=Invoke-DetailedTrace -SessionPath (Join-Path $sessionDir 'session.json') -TraceId $waitingRun.id -IncludeUsb
+        Assert-Investigation ($timedOut.status -eq 'Failed' -and $timedOut.stopReason -eq 'CaptureAckTimeout' -and
+            $timedOut.captureHandshake.status -eq 'TimedOut' -and $timedOut.usb.status -eq 'Completed' -and
+            $timedOut.audioStatus -eq 'Completed') 'A missing UI acknowledgement times out, stops owned traces and preserves both ETLs independently of audio'
         $run.state.status='Inspecting';$run.stopRequested=$true
         $view=Get-TracePresentation $run $run.state Running
         Assert-Investigation ($view.phase -eq 'Inspecting' -and $view.busy -and -not $view.canStop) 'Post-save inspection is a visible busy phase, separate from stop acknowledgement'
