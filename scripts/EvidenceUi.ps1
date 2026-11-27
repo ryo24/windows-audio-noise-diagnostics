@@ -22,17 +22,19 @@ function Update-TraceUi {
     if(-not $script:traceRun){$traceOpen.Enabled=$false;$traceProgress.Visible=$false;return}
     $presentation=$script:tracePresentation
     if(-not $presentation){return}
-    $traceStatus.Text=$presentation.text+"`r`n"+'保存先：traces/'+$script:traceRun.id+' / インスタンス：AudioNoise-'+$script:traceRun.id
+    $newStatus=$presentation.text+"`r`n"+'保存先：traces/'+$script:traceRun.id+' / インスタンス：AudioNoise-'+$script:traceRun.id
+    if($traceStatus.Text -ne $newStatus){$traceStatus.Text=$newStatus}
     $traceStop.Enabled=($presentation.busy -and $presentation.canStop)
-    $traceStop.Text=if($presentation.phase -in @('Saving','SaveDelayed')){'WPRの停止・保存中'}elseif($script:traceRun.stopRequested -and $presentation.busy){'WPRの停止要求済み'}else{'WPRを停止して保存'}
+    $traceStop.Text=if($presentation.phase -eq 'Inspecting'){'追加情報の取得・検査中'}elseif($presentation.phase -in @('Saving','SaveDelayed')){'WPRの停止・保存中'}elseif($script:traceRun.stopRequested -and $presentation.busy){'WPRの停止要求済み'}else{'WPRを停止して保存'}
     $traceOpen.Enabled=(Test-Path -LiteralPath $script:traceRun.directory)
     $traceProgress.Visible=$presentation.busy
-    $traceProgress.Style=if($presentation.indeterminate){'Marquee'}else{'Continuous'}
-    if($presentation.phase -eq 'Recording'){$traceProgress.Value=[int][Math]::Min(60,(Get-TraceAgeSeconds $script:traceRun.state.started))}else{$traceProgress.Value=0}
+    $style=if($presentation.indeterminate){'Marquee'}else{'Continuous'}
+    if($traceProgress.Style -ne $style){$traceProgress.Style=$style}
+    if($presentation.phase -eq 'Recording'){$traceProgress.Value=[int][Math]::Min(60,(Get-TraceAgeSeconds $(if($script:traceRun.state.captureHandshake.acknowledged){$script:traceRun.state.captureHandshake.acknowledged}else{$script:traceRun.state.started})))}else{$traceProgress.Value=0}
 }
 function Poll-DetailedTrace {
     if(-not $script:traceRun -or $script:traceRun.terminalHandled){return}
-    $run=$script:traceRun;$processState='Unknown';$readError=''
+    $run=$script:traceRun;$previousPhase=$run.phase;$processState='Unknown';$readError=''
     if($script:traceProcess){
         try {
             $script:traceProcess.Refresh()
@@ -43,25 +45,31 @@ function Poll-DetailedTrace {
     $script:tracePresentation=Get-TracePresentation $run $run.state $processState -ReadError $readError
     $run.phase=$script:tracePresentation.phase;$run.busy=$script:tracePresentation.busy
     if($script:activeTest.followUp.captureStage -eq 'AwaitingTrace' -and $run.state.link.testId -eq $script:activeTest.id -and -not $script:finishRequested){
-        if($run.phase -eq 'Recording' -and $run.state.usb.status -eq 'Recording'){
+        $readyPhase=if($run.state.requireCaptureAck){'AwaitingCapture'}else{'Recording'}
+        $readyExpired=$run.state.requireCaptureAck -and $run.state.captureHandshake.ready -and
+            (Get-TraceAgeSeconds $run.state.captureHandshake.ready) -ge $run.state.captureHandshake.timeoutSeconds
+        if(-not $readyExpired -and $run.phase -eq $readyPhase -and $run.state.usb.status -eq 'Recording' -and
+            $run.state.audioStatus -eq 'Recording' -and $run.state.link.probeId -eq $script:recordingProbe.id){
             $script:activeTest.followUp.captureStage='StartingAudio'
             [void](Add-TimelineEvent $script:session 'UsbAudioReady' $script:activeTest.id $script:recordingProbe.id)
             try{Start-ObservationCapture $script:activeTest.id -Prepared;Save-CurrentSession}
             catch{$script:activeTest.followUp.captureStage='AudioFailed';Request-ObservationFinish;Show-UiError $_.Exception.Message}
-        }elseif(-not $run.busy){
+        }elseif(-not $run.busy -or $run.phase -in @('Saving','Inspecting')){
             $script:activeTest.followUp.captureStage='NotStarted';$script:recordingProbe.status='NotStarted'
             $script:activeTest.notes+=' / USB＋Audioの開始を確認できず、テスト音と録音は開始しなかった。'
             Request-ObservationFinish
         }
     }
-    if(-not $run.busy){
+    if(-not $run.busy -or $run.phase -in @('Saving','Inspecting')){
         if($script:activeTest.followUp.captureStage -in @('StartingAudio','Started') -and $run.state.link.testId -eq $script:activeTest.id -and -not $script:finishRequested){$script:activeTest.followUp.captureStage='TraceEnded';Request-ObservationFinish}
+    }
+    if(-not $run.busy){
         if($script:tracePresentation.phase -eq 'Failed' -and $run.state.status -eq 'Completed'){
             $run.state|Add-Member -NotePropertyName lastWorkerStatus -NotePropertyValue 'Completed' -Force
             $run.state.status='Failed';$run.state|Add-Member -NotePropertyName errorType -NotePropertyValue 'SavedArtifactMismatch' -Force
             Write-AtomicText (Join-Path $run.directory 'trace.json') ($run.state|ConvertTo-Json -Depth 12)
         }
-        if($processState -eq 'Exited' -and $run.state.status -in @('Launching','Starting','Recording','Stopping')){
+        if($processState -eq 'Exited' -and $run.state.status -in @('Launching','Starting','AwaitingCapture','Recording','Stopping','Inspecting')){
             $run.state|Add-Member -NotePropertyName lastWorkerStatus -NotePropertyValue $run.state.status -Force
             $run.state.status='HelperExited'
             $run.state|Add-Member -NotePropertyName errorType -NotePropertyValue 'NoFinalState' -Force
@@ -72,7 +80,10 @@ function Poll-DetailedTrace {
         if($script:traceProcess){$script:traceProcess.Dispose();$script:traceProcess=$null}
         Save-CurrentSession
     }
-    Update-UiState
+    # Polling refreshes the live status only. Rebuilding the form repeatedly
+    # resets selection and repaints unrelated controls while awaiting the helper.
+    if($previousPhase -ne $run.phase -or -not $run.busy){Update-UiState}
+    else{Update-TraceUi;Update-LinkedTraceStatus}
 }
 function Request-TraceStop {
     if(-not (Test-DetailedTraceBusy)){return}
@@ -114,16 +125,21 @@ function Start-LinkedTrace {
     try{
         if(Test-DetailedTraceBusy){throw '前の詳細トレースの保存を待ってください。'}
         Save-CurrentSession
-        $script:traceRun=New-TraceRun $script:sessionDirectory $script:session.id -IncludeUsb:$IncludeUsb -Link $Link
+        $script:traceRun=New-TraceRun $script:sessionDirectory $script:session.id -IncludeUsb:$IncludeUsb -Link $Link -RequireCaptureAck:$IncludeUsb -CaptureSeconds $(if($IncludeUsb){$script:recordingProbe.maximumSeconds}else{60})
+        if($IncludeUsb){
+            $script:activeTest.followUp.traceId=$script:traceRun.id
+            Save-CurrentSession
+        }
         $script:tracePresentation=Get-TracePresentation $script:traceRun $script:traceRun.state
         Update-UiState;[Windows.Forms.Application]::DoEvents()
         if($script:traceRun.stopRequested){$script:traceRun.state.status='Cancelled';Write-AtomicText (Join-Path $script:traceRun.directory 'trace.json') ($script:traceRun.state|ConvertTo-Json -Depth 8);Poll-DetailedTrace;return}
         $script:traceProcess=Start-TraceHelper $script:traceRun
-        Poll-DetailedTrace
     }catch{
         if($script:traceRun){
             $state=$script:traceRun.state;$state.status='LaunchFailed';$state.errorType=if($_.Exception.NativeErrorCode -eq 1223){'AdminApprovalCancelled'}else{$_.Exception.GetType().Name}
             Write-AtomicText (Join-Path $script:traceRun.directory 'trace.json') ($state|ConvertTo-Json -Depth 8);Poll-DetailedTrace
         }else{Show-UiError $_.Exception.Message}
+        return
     }
+    Poll-DetailedTrace
 }

@@ -54,7 +54,7 @@ function Export-DiagnosticBundle {
             if(Test-Path -LiteralPath $statePath){
                 Assert-RegularBundleFile $SessionDirectory $statePath
                 $state=Get-Content -LiteralPath $statePath -Raw -Encoding UTF8|ConvertFrom-Json
-                if($state.status -in @('Launching','Starting','Recording','Stopping','Inspecting')){throw '詳細トレースの保存完了を待ってから書き出してください。'}
+                if($state.status -in @('Launching','Starting','AwaitingCapture','Recording','Stopping','Inspecting')){throw '詳細トレースの保存完了を待ってから書き出してください。'}
                 & $addFile ('traces/'+$trace.Name+'/trace.json')
                 foreach($artifact in @($state.investigation.files)){
                     if($artifact.name -notin @('investigation-before.json','investigation-after.json','investigation-samples.json','investigation-events.json','investigation-hypotheses.json','usb-validation.json','usb-provider-schema.json','usb-providers.txt')){continue}

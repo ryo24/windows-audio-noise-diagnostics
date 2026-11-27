@@ -1,13 +1,13 @@
 ﻿# The launcher and elevated recorder share one ID and directory before starting.
 # A stop request is not proof that WPR has stopped or that an ETL was saved.
 function New-TraceRun {
-    param([string]$SessionDirectory,[string]$SessionId,[switch]$IncludeUsb,$Link=$null)
+    param([string]$SessionDirectory,[string]$SessionId,[switch]$IncludeUsb,$Link=$null,[switch]$RequireCaptureAck,[int]$CaptureSeconds=60)
     if($SessionId -notmatch '^[a-fA-F0-9]{32}$'){throw 'Invalid session ID'}
     $id=[guid]::NewGuid().ToString('N');$point=Get-ClockPoint
     $directory=Join-Path (Join-Path $SessionDirectory 'traces') $id
     [IO.Directory]::CreateDirectory($directory)|Out-Null
     $run=[pscustomobject]@{id=$id;sessionId=$SessionId;directory=$directory;requested=$point;stopRequested=$false;stopPoint=$null;state=$null;phase='Launching';busy=$true;processExitCode=$null;terminalHandled=$false}
-    $state=[pscustomobject]@{id=$id;sessionId=$SessionId;instanceName=('AudioNoise-'+$id);status='Launching';includeUsb=[bool]$IncludeUsb;link=$Link;requestedSeconds=60;requested=$point;updated=$point;started=$null;stopping=$null;ended=$null;bytes=0;sha256=$null;errorType=$null}
+    $state=[pscustomobject]@{id=$id;sessionId=$SessionId;instanceName=('AudioNoise-'+$id);status='Launching';includeUsb=[bool]$IncludeUsb;requireCaptureAck=[bool]$RequireCaptureAck;link=$Link;requestedSeconds=$CaptureSeconds;requested=$point;updated=$point;started=$null;stopping=$null;ended=$null;bytes=0;sha256=$null;errorType=$null}
     Write-AtomicText (Join-Path $directory 'trace.json') ($state|ConvertTo-Json -Depth 8)
     $run.state=$state
     return $run
@@ -20,12 +20,47 @@ function Send-TraceStopRequest {
     Write-AtomicText (Join-Path $Run.directory 'stop.request') (([pscustomobject]@{traceId=$Run.id;requested=$point})|ConvertTo-Json -Depth 4)
     $Run.stopRequested=$true;$Run.stopPoint=$point
 }
+function Confirm-TraceCaptureStarted {
+    param($Run,$Test,$Probe,$Point)
+    if(-not $Run.state.requireCaptureAck){return}
+    $ready=$Run.state.captureHandshake
+    if($ready.status -ne 'Waiting' -or $Run.stopRequested -or
+        $Run.state.link.testId -ne $Test.id -or $Run.state.link.probeId -ne $Probe.id){
+        throw 'USB＋Audioの録音開始を確認できませんでした。'
+    }
+    $ack=[pscustomobject]@{traceId=$Run.id;testId=$Test.id;probeId=$Probe.id;readyQpc=$ready.ready.qpc;point=$Point}
+    Write-AtomicText (Join-Path $Run.directory 'capture-started.json') ($ack|ConvertTo-Json -Depth 4)
+}
+function Read-TraceCaptureAck {
+    param([string]$Path,$State,$Now)
+    if(-not (Test-Path -LiteralPath $Path -PathType Leaf)){return}
+    if((Get-Item -LiteralPath $Path).Length -gt 4096){throw 'Oversize capture acknowledgement'}
+    $ack=Get-Content -LiteralPath $Path -Raw -Encoding UTF8|ConvertFrom-Json
+    if(-not $Now){$Now=Get-ClockPoint}
+    $ready=$State.captureHandshake.ready
+    if($ack.traceId -ne $State.id -or $ack.testId -ne $State.link.testId -or
+        $ack.probeId -ne $State.link.probeId -or $ack.readyQpc -ne $ready.qpc -or
+        $ack.point.frequency -ne $ready.frequency -or $ack.point.qpc -lt $ready.qpc -or
+        $ack.point.qpc -gt $Now.qpc -or
+        $ack.point.qpc -gt ($ready.qpc+$State.captureHandshake.timeoutSeconds*$ready.frequency)){
+        throw 'Invalid capture acknowledgement'
+    }
+    return $ack.point
+}
 function Read-TraceRunState {
     param($Run)
     $path=Join-Path $Run.directory 'trace.json'
-    if(-not (Test-Path -LiteralPath $path)){return $null}
-    if((Get-Item -LiteralPath $path).Length -gt 16MB){throw 'Trace state exceeds its limit'}
-    $state=Get-Content -LiteralPath $path -Raw -Encoding UTF8|ConvertFrom-Json
+    # Retain a handle to one complete version while allowing the helper to
+    # atomically replace the path. Size and JSON then refer to the same file.
+    $share=[IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
+    try{$file=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::Read,$share)}
+    catch [IO.FileNotFoundException]{return $null}
+    catch [IO.DirectoryNotFoundException]{return $null}
+    try {
+        if($file.Length -gt 16MB){throw 'Trace state exceeds its limit'}
+        $reader=[IO.StreamReader]::new($file,[Text.Encoding]::UTF8)
+        try{$state=$reader.ReadToEnd()|ConvertFrom-Json}finally{$reader.Dispose()}
+    }finally{$file.Dispose()}
     if($state.id -ne $Run.id -or $state.sessionId -ne $Run.sessionId){throw 'Trace state belongs to another run'}
     return $state
 }
@@ -41,8 +76,24 @@ function Get-TracePresentation {
     $age=Get-TraceAgeSeconds $Run.requested $Now
     $status=if($State){$State.status}else{''}
     switch($status){
+        'Starting' {
+            $phase='Starting'
+            $stage=switch($State.startupStage){
+                'Usb' {'USBトレースを開始しています。'}
+                'Audio' {'Audioトレースを開始しています。'}
+                default {'管理者側の準備を確認しています。'}
+            }
+            $elapsed=Get-TraceAgeSeconds $State.started $Now
+            $text=$stage+' テスト音はまだ鳴りません（'+$elapsed+'秒）。'
+            if((Get-TraceAgeSeconds $State.updated $Now) -ge 15){$text+=' 開始状況の更新を待っています。';$canOpen=$true}
+        }
+        'AwaitingCapture' {
+            $phase='AwaitingCapture'
+            $elapsed=Get-TraceAgeSeconds $State.captureHandshake.ready $Now
+            $text='USBとAudioを開始しました。テスト音と内部録音の開始を確認しています（'+$elapsed+'秒）。'
+        }
         'Recording' {
-            $phase='Recording';$elapsed=Get-TraceAgeSeconds $State.started $Now
+            $phase='Recording';$recordingPoint=if($State.captureHandshake.acknowledged){$State.captureHandshake.acknowledged}else{$State.started};$elapsed=Get-TraceAgeSeconds $recordingPoint $Now
             $text='WPR追加取得中：'+$elapsed+'秒 / 最大'+$State.requestedSeconds+'秒。停止ボタンで早めに保存できます。'
             $indeterminate=$false
             if((Get-TraceAgeSeconds $State.updated $Now) -ge 15){$phase='NoStateUpdate';$text='WPRの状態更新が止まっています。停止・保存の完了は未確認です。保存先のtrace.jsonとインスタンス名を確認してください。';$canOpen=$true}
@@ -54,7 +105,9 @@ function Get-TracePresentation {
         }
         'Inspecting' {
             $phase='Inspecting';$canStop=$false;$canOpen=$true
-            $text='ETLの停止処理後、追加情報とUSBイベントの読み取りを確認しています。保存済みファイルと検査結果は別々に記録します。'
+            $elapsed=Get-TraceAgeSeconds $State.inspectionStarted $Now
+            $stage=if($State.investigation.phase -eq 'ValidateUsb'){'保存済みETLのUSBイベントを検査しています。'}else{'ETLを保存しました。機器・設定などの追加情報を取得しています。'}
+            $text=$stage+'（'+$elapsed+'秒）'
         }
         'Completed' {
             $path=Join-Path $Run.directory 'trace.etl'
@@ -63,10 +116,11 @@ function Get-TracePresentation {
                 $text='WPRの停止・保存が完了しました（'+[Math]::Round($State.bytes/1MB,1)+' MB）。「WPRの保存先を開く」でtrace.etlを確認できます。'
             }else{$phase='Failed';$busy=$false;$canStop=$false;$canOpen=$true;$indeterminate=$false;$text='保存完了の記録とETLファイルが一致しません。保存先を開いて確認してください。'}
         }
-        'Cancelled' {$phase='Cancelled';$busy=$false;$canStop=$false;$canOpen=$true;$indeterminate=$false;$text='WPRの開始前に停止しました。ETLは作成していません。'}
+        'Cancelled' {$phase='Cancelled';$busy=$false;$canStop=$false;$canOpen=$true;$indeterminate=$false;$text='トレース準備中に終了しました。保存結果は「USB・Audio取得結果」で確認できます。'}
         {$_ -in @('Failed','StopFailed','LaunchFailed','HelperExited')} {
             $phase='Failed';$busy=$false;$canStop=$false;$canOpen=$true;$indeterminate=$false
             $text='WPRの取得・停止・保存を完了できませんでした（状態：'+$status+' / 開始コード：'+$State.startExitCode+' / 保存コード：'+$State.stopExitCode+' / '+$State.errorType+'）。保存先のtrace.jsonを確認してください。'
+            if($State.stopReason -eq 'CaptureAckTimeout'){$text='USBとAudioは開始しましたが、内部録音の開始確認が届かなかったため終了しました。保存できたETLは取得結果で確認できます。'}
             if($State.errorType -eq 'AdminApprovalCancelled'){$text='管理者権限の確認がキャンセルされたため、WPRは開始していません。必要なら再度開始してください。'}
         }
     }

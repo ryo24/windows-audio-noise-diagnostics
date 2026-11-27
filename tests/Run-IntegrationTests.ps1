@@ -64,6 +64,22 @@ public static class AtomicReaderFixture {
         [Threading.Thread]::CurrentThread.CurrentCulture=[Globalization.CultureInfo]::GetCultureInfo($(if($originalCulture.Name -eq 'ja-JP'){'en-US'}else{'ja-JP'}))
         Assert-Integration ((Get-DiagnosticNativeEncoding).CodePage -eq $oemEncoding.CodePage) 'Native encoding follows the OS code page even when the user culture differs'
     }finally{[Threading.Thread]::CurrentThread.CurrentCulture=$originalCulture}
+    $linkTest=[pscustomobject]@{id=[guid]::NewGuid().ToString('N')}
+    $linkProbe=[pscustomobject]@{id=[guid]::NewGuid().ToString('N')}
+    $linkedRun=New-TraceRun $directory $session.id -IncludeUsb -RequireCaptureAck -CaptureSeconds 30 -Link ([pscustomobject]@{testId=$linkTest.id;probeId=$linkProbe.id})
+    $linkedRun.state|Add-Member captureHandshake ([pscustomobject]@{status='Waiting';ready=Get-ClockPoint;timeoutSeconds=30})
+    $ackPoint=Get-ClockPoint
+    Confirm-TraceCaptureStarted $linkedRun $linkTest $linkProbe $ackPoint
+    $ackPath=Join-Path $linkedRun.directory 'capture-started.json'
+    Assert-Integration ((Read-TraceCaptureAck $ackPath $linkedRun.state (Get-ClockPoint)).qpc -eq $ackPoint.qpc) 'Matching trace/test/probe and readiness QPC accept the atomic audio start acknowledgement'
+    $invalidAck=Get-Content -LiteralPath $ackPath -Raw|ConvertFrom-Json
+    $invalidAck.probeId=[guid]::NewGuid().ToString('N')
+    Write-AtomicText $ackPath ($invalidAck|ConvertTo-Json -Depth 5)
+    $rejected=$false
+    try{Read-TraceCaptureAck $ackPath $linkedRun.state (Get-ClockPoint)|Out-Null}catch{$rejected=$true}
+    Assert-Integration $rejected 'Another probe cannot release the linked ETW capture timer'
+    $linkedRun.state.status='Cancelled'
+    Write-AtomicText (Join-Path $linkedRun.directory 'trace.json') ($linkedRun.state|ConvertTo-Json -Depth 8)
     $probe=[pscustomobject]@{endpointName='USB Audio and HID';playbackSnapshot=[pscustomobject]@{data=[pscustomobject]@{outputs=@([pscustomobject]@{isSelectedForProbe=$true;endpointRef='capture-ref'})}}}
     $notice=Get-PlaybackReviewNotice $probe 'USB Audio and HID' 'capture-ref'
     Assert-Integration ($notice.relation -eq 'SameEndpoint' -and $notice.text.Contains('同じ出力') -and $notice.text.Contains('切り替え')) 'Playback notice explicitly warns when the recorded output is reused'

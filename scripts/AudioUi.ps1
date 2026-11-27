@@ -100,13 +100,22 @@ function Start-ObservationCapture {
 }
 function Poll-AudioJobs {
     if($script:audioRecorder){
-        if($script:activeTest.followUp.captureStage -eq 'StartingAudio' -and $script:audioRecorder.Status -eq 'Recording'){
+        if($script:activeTest.followUp.captureStage -eq 'StartingAudio' -and
+            $script:audioRecorder.Status -eq 'Recording' -and -not $script:finishRequested){
+            $point=Get-ClockPoint
+            try{Confirm-TraceCaptureStarted $script:traceRun $script:activeTest $script:recordingProbe $point}
+            catch{
+                $script:activeTest.followUp.captureStage='AudioFailed'
+                $script:activeTest.notes+=' / 録音開始の応答を書き込めませんでした。'
+                Request-ObservationFinish
+                return
+            }
             $script:activeTest.followUp.captureStage='Started'
-            $script:activeTest.followUp|Add-Member -NotePropertyName simultaneousConfirmed -NotePropertyValue (Get-ClockPoint) -Force
+            $script:activeTest.followUp|Add-Member -NotePropertyName simultaneousConfirmed -NotePropertyValue $point -Force
             [void](Add-TimelineEvent $script:session 'SimultaneousCaptureConfirmed' $script:activeTest.id $script:recordingProbe.id)
             Save-CurrentSession;Update-UiState
         }
-        $runAudioStatus.Text=('録音中：'+[Math]::Round($script:audioRecorder.ElapsedSeconds,1)+' / '+$script:recordingProbe.maximumSeconds+'秒。聞こえたノイズをボタンで記録してください。')
+        if($script:activeTest.followUp.kind -ne 'UsbTransfer'){$runAudioStatus.Text=('録音中：'+[Math]::Round($script:audioRecorder.ElapsedSeconds,1)+' / '+$script:recordingProbe.maximumSeconds+'秒。聞こえたノイズをボタンで記録してください。')}
         if($script:audioRecorder.Finished){
             if($script:activeTest.followUp.captureStage -eq 'StartingAudio'){$script:activeTest.followUp.captureStage='AudioFailed'}
             Complete-AudioProbeRecord $script:recordingProbe $script:audioRecorder $script:sessionDirectory
