@@ -21,7 +21,7 @@ function Get-InvestigationNative {
     $nativeResultBox=New-Object 'System.Collections.Generic.List[object]'
     $code=Invoke-DiagnosticProcess -Executable (Join-Path $env:SystemRoot ('System32/'+$Executable)) -Arguments $Arguments -Heartbeat $Heartbeat -OnResult {param($result);$nativeResultBox.Add($result)}
     $record=if($nativeResultBox.Count){$nativeResultBox[0]}else{[pscustomobject]@{exitCode=$code;stdout='';stderr='';started=$null;ended=$null}}
-    [pscustomobject]@{exitCode=$code;started=$record.started;ended=$record.ended;stdout=Protect-InvestigationText $record.stdout $SessionDirectory 65536;stderr=Protect-InvestigationText $record.stderr $SessionDirectory 65536;outputTruncated=($record.stdout.Length -gt 65536 -or $record.stderr.Length -gt 65536)}
+    [pscustomobject]@{exitCode=$code;outputEncoding=$record.outputEncoding;outputCodePage=$record.outputCodePage;started=$record.started;ended=$record.ended;stdout=Protect-InvestigationText $record.stdout $SessionDirectory 65536;stderr=Protect-InvestigationText $record.stderr $SessionDirectory 65536;outputTruncated=($record.stdout.Length -gt 65536 -or $record.stderr.Length -gt 65536)}
 }
 function Get-InvestigationAudio {
     param([string]$EndpointRef,[string]$Salt)
