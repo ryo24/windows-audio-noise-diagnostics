@@ -11,8 +11,13 @@ if($WaitForRelease){
 # only. This never requests elevation or records any actual system activity.
 function Get-UsbTraceProviders { @([pscustomobject]@{name='Microsoft-Windows-USB-USBXHCI';id=[guid]::Empty.ToString();keywords='0x8243';level=5}) }
 $usbPath=Join-Path (Join-Path (Join-Path (Split-Path -Parent $SessionPath) 'traces') $TraceId) 'usb.etl'
-$usbRunner={param($a);if($a[0] -eq 'create' -and $FailUsbStart){return 9};if($a[0] -eq 'stop'){if($FailUsbSave){return 12};[IO.File]::WriteAllText($usbPath,'Synthetic USB trace fixture')};return 0}
-$state=Invoke-DetailedTrace -SessionPath $SessionPath -TraceId $TraceId -Seconds 30 -IncludeUsb:$IncludeUsb -UsbRunner $usbRunner -WprRunner {
+$usbRunner={param($a);if($a[0] -eq 'create' -and $FailUsbStart){return 9};if($a[0] -eq 'stop'){if($FailUsbStart){return 1168};if($FailUsbSave){return 12};[IO.File]::WriteAllText($usbPath,'Synthetic USB trace fixture')};return 0}
+# Synthetic read-only investigation adapters; fixture ETL bytes are not real USB events.
+function Get-InvestigationSnapshot {param($Target,$Salt,$SessionDirectory,$Heartbeat);if($Heartbeat){& $Heartbeat};[pscustomobject]@{point=Get-ClockPoint;source='SyntheticUiFixture';audio=[pscustomobject]@{status='unavailable'};devices=[pscustomobject]@{status='unavailable'}}}
+function Get-InvestigationSample {param($SessionDirectory,$Target,$Salt);[pscustomobject]@{point=Get-ClockPoint;source='SyntheticUiFixture'}}
+function Get-InvestigationEvents {param($Start,$End,$SessionDirectory);[pscustomobject]@{status='unavailable';source='SyntheticUiFixture'}}
+function Test-InvestigationUsbEvents {param($Path,$Target,$Salt,$Heartbeat);[pscustomobject]@{status='SyntheticNotInspected';usbEventsInSample=0;scanCapped=$false;targetSelection=$null}}
+$state=Invoke-DetailedTrace -SessionPath $SessionPath -TraceId $TraceId -Seconds 30 -IncludeUsb:$IncludeUsb -ExerciseInvestigation:$IncludeUsb -UsbRunner $usbRunner -WprRunner {
     param($arguments)
     if($arguments[0] -eq '-start'){Start-Sleep -Milliseconds 800}
     if($arguments[0] -eq '-marker' -and $ExitWithoutFinalState){[Environment]::Exit(9)}

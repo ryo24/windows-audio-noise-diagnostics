@@ -177,7 +177,7 @@ $resume.Add_Click({
             Import-SessionAudio $loaded (Split-Path -Parent $dialog.FileName) $script:sessionDirectory
             Import-PhysicalFiles $loaded (Split-Path -Parent $dialog.FileName) $script:sessionDirectory
             Import-SessionTraces (Split-Path -Parent $dialog.FileName) $script:sessionDirectory
-            foreach($probe in @($loaded.audioProbes | Where-Object {$_.status -in @('Starting','Recording')})){$probe.status='Interrupted';$probe.verification.reviewPlaybackCompleted=$false;$probe.verification.notes+=' 録音が中断され、WAVが未確定の可能性があります。'}
+            foreach($probe in @($loaded.audioProbes | Where-Object {$_.status -in @('Starting','Recording','AwaitingTrace')})){$probe.status='Interrupted';$probe.verification.reviewPlaybackCompleted=$false;$probe.verification.notes+=' 録音が中断され、WAVが未確定の可能性があります。'}
             $script:session=$loaded
             Reset-EvidenceUiForSession
             Set-ProfileControls $loaded.profile

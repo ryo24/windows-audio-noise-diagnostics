@@ -54,8 +54,12 @@ function Export-DiagnosticBundle {
             if(Test-Path -LiteralPath $statePath){
                 Assert-RegularBundleFile $SessionDirectory $statePath
                 $state=Get-Content -LiteralPath $statePath -Raw -Encoding UTF8|ConvertFrom-Json
-                if($state.status -in @('Launching','Starting','Recording','Stopping')){throw '詳細トレースの保存完了を待ってから書き出してください。'}
+                if($state.status -in @('Launching','Starting','Recording','Stopping','Inspecting')){throw '詳細トレースの保存完了を待ってから書き出してください。'}
                 & $addFile ('traces/'+$trace.Name+'/trace.json')
+                foreach($artifact in @($state.investigation.files)){
+                    if($artifact.name -notin @('investigation-before.json','investigation-after.json','investigation-samples.json','investigation-events.json','investigation-hypotheses.json','usb-validation.json','usb-provider-schema.json','usb-providers.txt')){continue}
+                    & $addFile ('traces/'+$trace.Name+'/'+$artifact.name) $artifact.sha256
+                }
             }
             foreach($kind in @('trace','usb')){
                 $etl='traces/'+$trace.Name+'/'+$kind+'.etl'
@@ -187,7 +191,7 @@ function Import-SessionTraces {
     if(-not (Test-Path -LiteralPath $sourceRoot)){return}
     foreach($directory in Get-ChildItem -LiteralPath $sourceRoot -Directory){
         if($directory.Name -notmatch '^[a-fA-F0-9]{32}$'){continue}
-        foreach($name in @('trace.json','trace.etl','usb.etl')){
+        foreach($name in @('trace.json','trace.etl','usb.etl','investigation-before.json','investigation-after.json','investigation-samples.json','investigation-events.json','investigation-hypotheses.json','usb-validation.json','usb-provider-schema.json','usb-providers.txt')){
             $source=Join-Path $directory.FullName $name
             if(-not (Test-Path -LiteralPath $source)){continue}
             Assert-RegularBundleFile $SourceDirectory $source

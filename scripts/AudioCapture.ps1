@@ -38,6 +38,7 @@ function Complete-AudioProbeRecord {
         packetCount=$Recorder.PacketCount;discontinuities=$Recorder.Discontinuities;timestampErrors=$Recorder.TimestampErrors;packetFlags=@($Recorder.FlagEvents)
         flagEventsTruncated=($Recorder.Discontinuities+$Recorder.TimestampErrors -gt 1000);sizeLimitReached=$Recorder.SizeLimitReached
         referenceStartOffsetSeconds=$Recorder.ReferenceStartOffsetSeconds;errorCode=$Recorder.ErrorCode
+        streamTiming=[pscustomobject]@{enabled=[bool]$Recorder.TimingRequested;renderSampleLimitReached=(@($Recorder.RenderClockSamples|Where-Object {$_}).Count -ge 4096);captureSampleLimitReached=(@($Recorder.CaptureTimingSamples|Where-Object {$_}).Count -ge 4096);renderClockFrequency=$Recorder.RenderClockFrequency;renderClockError=$Recorder.RenderClockError;renderBufferFrames=$Recorder.RenderBufferFrames;renderSubmittedFrames=$Recorder.RenderSubmittedFrames;renderClockSamples=@($Recorder.RenderClockSamples|Where-Object {$_});reportedRenderRateRatio=$Recorder.ReportedRenderRateRatio;renderClockRegressions=$Recorder.RenderClockRegressions;capturePackets=@($Recorder.CaptureTimingSamples|Where-Object {$_});maxSamples=4096;nominalIntervalSeconds=0.1;scope='Windows-reported stream/device clock, not a direct measurement of DAC/USB bus frequency. DevicePosition uses RenderClockFrequency units; ClockQpc100ns and PacketQpc100ns are 100ns QPC units, while Query/ObservedQpc use capture.qpcFrequency. Flags and S_FALSE/error results affect validity. Padding zero is not automatically a glitch.'}
         note='取得できない間隔には時刻合わせの無音を補います。補った無音と不連続フラグは可聴ノイズの自動判定ではありません。最初のパケットの不連続には開始遷移も含まれます。'
     }
     foreach ($kind in @('recording','reference')) {
@@ -46,6 +47,10 @@ function Complete-AudioProbeRecord {
             $path=Resolve-AudioFile $SessionDirectory $relative
             if (Test-Path -LiteralPath $path) { $Record.files.($kind+'Sha256')=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
         }
+    }
+    if($Record.mode -eq 'Reference' -and $Record.sourceKind -eq 'Loopback' -and $Record.status -eq 'Completed'){
+        $comparison=Invoke-CollectionSection {[AudioNoiseDiagnostics.AudioFiles]::CompareReference((Resolve-AudioFile $SessionDirectory $Record.files.recording),(Resolve-AudioFile $SessionDirectory $Record.files.reference))}
+        $Record|Add-Member -NotePropertyName referenceComparison -NotePropertyValue $comparison -Force
     }
 }
 
@@ -82,7 +87,7 @@ function Get-AudioReportHtml {
         }
         $links=New-Object 'System.Collections.Generic.List[string]'
         foreach($kind in @('recording','reference')){$relative=$record.files.$kind;if($relative -match '^audio/[a-fA-F0-9]{32}/(loopback|microphone|reference)\.wav$'){$links.Add('<a href="'+$relative+'">'+$kind+' WAV</a>')}}
-        $summary=[pscustomobject]@{status=$record.status;mode=$record.mode;sourceKind=$record.sourceKind;inputEndpoint=$record.inputEndpointName;captureOutput=$record.endpointName;verification=$record.verification;capture=$record.capture;selectedOutputFormat=$record.selectedOutputFormat;referenceId=$record.referenceId;referencePattern=$record.referencePattern;noiseMarkersUtc=$record.noiseMarkersUtc;files=$record.files;tool=$record.tool}
+        $summary=[pscustomobject]@{status=$record.status;mode=$record.mode;sourceKind=$record.sourceKind;inputEndpoint=$record.inputEndpointName;captureOutput=$record.endpointName;verification=$record.verification;capture=$record.capture;selectedOutputFormat=$record.selectedOutputFormat;referenceId=$record.referenceId;referencePattern=$record.referencePattern;referenceComparison=$record.referenceComparison;noiseMarkersUtc=$record.noiseMarkersUtc;files=$record.files;tool=$record.tool}
         $sections.Add('<article><h3>録音 '+(ConvertTo-HtmlText $record.id)+'</h3><p>'+(ConvertTo-HtmlText $finding)+'</p><p>'+($links -join ' ／ ')+'</p><details><summary>録音・照合の詳細</summary><pre>'+(ConvertTo-HtmlText ($summary | ConvertTo-Json -Depth 12))+'</pre></details></article>')
     }
     return '<h2>テスト音声・録音・聞き直し</h2><p><strong>再生前に、ノイズが出ないと確認済みの出力へ切り替えてください。</strong>この報告書から直接開く場合、アプリの出力確認ダイアログは表示されません。</p><p>LoopbackはWindows出力のデジタル音声、Microphoneは選択したマイク入力です。マイクには部屋の音、距離、入力の音声処理の影響も含まれます。デジタル録音に3.5mmのアナログ回路以降の混入音が入る保証はありません。欠落フラグだけで可聴ノイズを自動判定しません。</p>'+($sections -join "`n")

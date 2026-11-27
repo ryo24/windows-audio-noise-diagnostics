@@ -25,7 +25,7 @@ function New-FollowUpTab {
     $external.Add_Click({Select-FollowUpReferenceFile})
     $script:followUpRoute=New-Object Windows.Forms.TextBox;$followUpRoute.Dock='Fill';Add-UiField $grid 8 'スマホで録る接続・位置' $followUpRoute
     $script:followUpFormat=New-Object Windows.Forms.TextBox;$followUpFormat.Dock='Fill';Add-UiField $grid 9 '形式の元の値 → 変更後' $followUpFormat
-    $script:followUpConsent=New-Object Windows.Forms.CheckBox;$followUpConsent.Dock='Fill';$followUpConsent.Text="USB＋Audioの取得負荷・全USB機器の識別情報を含む可能性を確認し、`r`n共通の開始時に管理者権限で取得することを了承する。`r`nETLは書き出し画面で「詳細ETLも含める」を選んだ場合だけZIPへ含める。"
+    $script:followUpConsent=New-Object Windows.Forms.CheckBox;$followUpConsent.Dock='Fill';$followUpConsent.Text="USB＋Audio、機器・音声設定・電源・CPU/サービス・関連イベントの取得範囲と負荷を確認し、`r`n管理者権限で開始し、前後の状態・コマンドのエラー文も保存することを了承する。`r`nETLは「詳細ETLも含める」を選ぶ場合だけZIPへ含める。追加診断JSONは通常ZIPにも含む。"
     $grid.Controls.Add($followUpConsent,0,3);$grid.SetColumnSpan($followUpConsent,2)
     $script:followUpApply=New-UiButton '共通テスト音声・30秒に設定';$script:followUpSound=New-UiButton 'Windowsのサウンド設定';$apply=$followUpApply;$sound=$followUpSound
     $buttons=New-Object Windows.Forms.FlowLayoutPanel;$buttons.Dock='Fill';$buttons.Controls.AddRange([Windows.Forms.Control[]]@($apply,$sound));$grid.Controls.Add($buttons,0,4);$grid.SetColumnSpan($buttons,2)

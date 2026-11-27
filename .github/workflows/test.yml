@@ -31,6 +31,12 @@ jobs:
       - name: Test USB selection, capture absence, cancellation and artifact truth
         shell: powershell
         run: .\tests\Run-UsbReadinessTests.ps1
+      - name: Test native Logman direct-session argument and file contract
+        shell: powershell
+        run: .\tests\Run-LogmanContractTests.ps1
+      - name: Test deep capture evidence, reference comparison and partial failures
+        shell: powershell
+        run: .\tests\Run-InvestigationTests.ps1
       - name: Exercise linked follow-up recording and USB capture
         shell: powershell
         run: .\scripts\Start-Diagnostics.ps1 -SmokeTest -ExerciseFollowUpWorkflow

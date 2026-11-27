@@ -114,7 +114,9 @@ function Get-Assessment {
     } else {
         $items.Add([pscustomobject]@{ title='BIOS設定は任意の記録'; text='C-Statesの確認・変更を調査の必須条件にはしません。実機メーカーが対象機種向けに案内している場合だけ確認してください。他社のBIOS手順をそのまま適用しません。' })
     }
-    $complete = @($Session.tests | Where-Object { $_.result -notin @('InProgress','Interrupted','NotRun') })
+    $complete = @($Session.tests | Where-Object { $_.result -notin @('InProgress','Interrupted','NotRun','Inconclusive') -and $_.followUp.captureStage -ne 'NotStarted' })
+    $unstarted=@($Session.tests|Where-Object {$_.followUp.kind -eq 'UsbTransfer' -and $_.followUp.captureStage -eq 'NotStarted'})
+    if($unstarted.Count){$items.Add([pscustomobject]@{title='音声テスト未開始の試行があります';text='USB＋Audioの開始失敗等でテスト音・内部録音が始まらなかった試行は、ノイズなしの証拠にしません。取得結果とコマンドのエラーを確認し、先に調査ツールの取得を成立させてください。'});if(-not $complete.Count){return $items.ToArray()}}
     $baseline = @($complete | Where-Object { $_.kind -eq 'baseline35' -and @($_.noiseUtc).Count -gt 0 })
     if ($baseline.Count -eq 0) {
         $items.Add([pscustomobject]@{ title='基準条件の再現記録が必要'; text='現在の3.5mm接続でノイズが出ることを記録してください。再起動直後だけ出ない場合もあるため、無発生は「再現せず」と記録し、改善の証明にはしません。' })
@@ -134,7 +136,7 @@ function Get-Assessment {
     if ($hdmiNoise.Count -gt 0) {
         $items.Add([pscustomobject]@{ title='HDMIにも発生する記録あり'; text='今回の記録では3.5mm限定ではありません。出力先を確認し、同一素材で比較してください。アプリやシステム共通の処理も候補になります。' })
     }
-    $unrun = @((Get-TestDefinitions) | Where-Object { $_.id -ne 'recheck' -and $_.id -notin @($Session.tests | Where-Object { $_.result -notin @('InProgress','Interrupted','NotRun') } | ForEach-Object { $_.kind }) })
+    $unrun = @((Get-TestDefinitions) | Where-Object { $_.id -ne 'recheck' -and $_.id -notin @($Session.tests | Where-Object { $_.result -notin @('InProgress','Interrupted','NotRun','Inconclusive') } | ForEach-Object { $_.kind }) })
     if ($unrun.Count -gt 0) { $items.Add([pscustomobject]@{ title='次の未確認項目'; text=($unrun | ForEach-Object { $_.title }) -join ' ／ ' }) }
     $short = @($complete | Where-Object { $_.durationSeconds -lt 600 })
     if ($short.Count -gt 0) { $items.Add([pscustomobject]@{ title='観察時間が短い記録あり'; text='標準は各10分です。短い記録も保存しますが、無発生や改善の判断材料としては不足する場合があります。' }) }
@@ -186,7 +188,7 @@ function ConvertTo-SafeCsvCell {
 
 function Get-ResultLabel {
     param([string]$Result)
-    $labels = @{ InProgress='調査中'; Interrupted='中断'; NotRun='未実施'; NoRepro='再現せず'; Improved='改善'; Unchanged='変化なし'; Worse='悪化' }
+    $labels = @{ InProgress='調査中'; Interrupted='中断'; NotRun='未実施'; Inconclusive='判定できず'; NoRepro='再現せず'; Improved='改善'; Unchanged='変化なし'; Worse='悪化' }
     if ($labels.ContainsKey($Result)) { return $labels[$Result] }
     return '不明'
 }

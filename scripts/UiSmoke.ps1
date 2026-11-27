@@ -50,7 +50,7 @@ if($exercise){
             Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -WindowStyle Hidden -ArgumentList $arguments -PassThru
         }
         $usbPreset.PerformClick()
-        Assert-Ui ($followUpChoice.SelectedIndex -eq 1 -and $settingsTabs.SelectedTab -eq $followUpTab -and -not $script:audioRecorder) 'The visible USB preset must configure USB capture without starting sound or consenting.'
+        Assert-Ui ($followUpChoice.SelectedIndex -eq 1 -and $settingsTabs.SelectedTab -eq $followUpTab -and -not $script:audioRecorder -and $includeTraces.Checked) 'The visible USB preset must configure USB capture without starting sound or consenting.'
         $followUpRoute.Text='Synthetic smartphone position';$audioConsent.Checked=$true
         Assert-Ui (-not $start.Enabled) 'USB follow-up must require its own trace scope acknowledgement.'
         $followUpConsent.Checked=$true;$audioLength.SelectedItem='30';Update-UiState
@@ -67,6 +67,8 @@ if($exercise){
         Assert-Ui ($script:traceRun.stopRequested -and $script:finishRequested) 'The common finish must request trace and recording stop together.'
         Wait-Ui {-not $script:activeTest -and -not $script:worker -and -not $script:bluetoothMonitor -and -not (Test-DetailedTraceBusy)}
         Assert-Ui ($script:traceRun.phase -eq 'Completed' -and (Test-Path (Join-Path $script:traceRun.directory 'usb.etl'))) 'Linked USB trace must finalize before export.'
+        Assert-Ui (@($linkedProbe.capture.streamTiming.renderClockSamples).Count -gt 0 -or [bool]$linkedProbe.capture.streamTiming.renderClockError) 'Deep capture must retain driver clock samples or an explicit clock API error.'
+        Assert-Ui (@($linkedProbe.capture.streamTiming.capturePackets).Count -gt 0 -or $linkedProbe.status -eq 'NoAudioData') 'Deep capture must retain capture-packet QPC timing when audio packets exist.'
         Assert-Ui ($traceResults.Text.Contains('保存確認済み') -and $traceResults.Text.Contains('bytes')) 'Results must show separate USB and Audio artifact states and actual sizes.'
         Initialize-LocalReceiver
         $media=[AudioNoiseDiagnostics.LocalReceiver]::ImportFile((Resolve-AudioFile $script:sessionDirectory $linkedProbe.files.reference),$script:sessionDirectory,'FileImport');Add-PhysicalMedia $media
@@ -84,7 +86,7 @@ if($exercise){
         $recoveryPlan=Get-FollowUpPlan
         Assert-Ui ($recoveryPlan.comparisonSessionId -eq $comparison.id -and $recoveryPlan.comparisonTestId -eq $comparisonTest.id -and $recoveryPlan.comparisonSourceHash -eq $beforeHash -and (Get-FileHash $comparisonPath).Hash -eq $beforeHash) 'Cross-session comparison must retain source identity and hash without modifying its JSON.'
         Assert-Ui ($recoveryPlan.priorOperation -eq 'MultipleChanges' -and $recoveryPlan.stateAtStart -eq 'NoNoiseConfirmed') 'Recovery comparison must distinguish combined operations and the reported starting state.'
-        Save-UiProof 'recovery-control';$tabs.SelectedTab=$exportPage;Update-UiState
+        Save-UiProof 'recovery-control';$tabs.SelectedTab=$exportPage;$includeTraces.Checked=$false;Update-UiState
         Assert-Ui ($exportReady.Text.Contains('既定ではETLを除外')) 'USB follow-up export must explain the opt-in ETL checkbox.'
         $includeTraces.Checked=$true;$export.PerformClick()
         Assert-Ui ((Test-DiagnosticBundle $script:lastExport).manifest.files.path -contains ('session/traces/'+$script:traceRun.id+'/usb.etl')) 'Explicit ETL export must include the linked USB trace.'
@@ -92,7 +94,7 @@ if($exercise){
         $script:failUsbStart=$true;$tabs.SelectedTab=$runPage;$start.PerformClick()
         Wait-Ui {-not $script:activeTest -and -not $script:worker -and -not $script:bluetoothMonitor -and -not (Test-DetailedTraceBusy)}
         $failed=@(Get-SessionTraceEvidence $script:session $script:sessionDirectory)[-1]
-        Assert-Ui ($failed.usb.status -eq 'StartFailed' -and $failed.audioTrace.status -eq 'NotStarted' -and $script:recordingProbe.status -eq 'NotStarted') 'USB start failure must end the attempt without playing the test sound or starting Audio.'
+        Assert-Ui ($script:session.tests[-1].result -eq 'Inconclusive' -and $failed.usb.status -eq 'StartFailed' -and $failed.audioTrace.status -eq 'NotStarted' -and $script:recordingProbe.status -eq 'NotStarted') 'USB start failure must end the attempt without playing the test sound or starting Audio.'
         $script:failUsbStart=$false;$script:cancelUsbAdmin=$true;$tabs.SelectedTab=$runPage;$start.PerformClick()
         Wait-Ui {-not $script:activeTest -and -not $script:worker -and -not $script:bluetoothMonitor -and -not (Test-DetailedTraceBusy)}
         $cancelled=@(Get-SessionTraceEvidence $script:session $script:sessionDirectory)[-1]

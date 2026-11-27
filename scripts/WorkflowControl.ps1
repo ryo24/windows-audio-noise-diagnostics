@@ -92,17 +92,22 @@ function Complete-ObservationFinish {
     $test=$script:activeTest
     try {
         $test.playbackSnapshots+=@(Invoke-CollectionSection {Get-PlaybackSnapshot $script:session.id})
-        $answerForm=New-Object Windows.Forms.Form;$answerForm.Text='調査を終了しました — 結果を記録';$answerForm.Size=New-Object Drawing.Size(640,400);$answerForm.StartPosition='CenterParent';$answerForm.Font=$form.Font
-        $answer=New-UiCombo @('再現せず','改善','変化なし','悪化');$answer.Dock='Top';$answer.SelectedIndex=if(@($test.noiseUtc).Count){2}else{0}
+        $answerForm=New-Object Windows.Forms.Form;$answerForm.Text='調査を終了しました — 結果を記録';$answerForm.Size=New-Object Drawing.Size(720,460);$answerForm.StartPosition='CenterParent';$answerForm.Font=$form.Font
+        $captureNotStarted=($script:recordingProbe.testId -eq $test.id -and $script:recordingProbe.status -eq 'NotStarted')
+        $answer=New-UiCombo @('再現せず','改善','変化なし','悪化','判定できず（未開始・取得不足）');$answer.Dock='Top';$answer.SelectedIndex=if($captureNotStarted){4}elseif(@($test.noiseUtc).Count){2}else{0}
         $recordingNote=if($script:recordingProbe -and $script:recordingProbe.testId -eq $test.id){' 録音状態：'+$script:recordingProbe.status+'（取得不足・失敗は正常の証明になりません）。'}else{''}
-        if($test.followUp.kind -eq 'UsbTransfer'){$recordingNote+="`r`n"+(Get-TraceEvidenceText @(Get-SessionTraceEvidence $script:session $script:sessionDirectory|Where-Object testId -eq $test.id))}
+        if($test.followUp.kind -eq 'UsbTransfer'){
+            $resultEvidence=@(Get-SessionTraceEvidence $script:session $script:sessionDirectory|Where-Object testId -eq $test.id)[0]
+            $recordingNote+="`r`n"+'USB：'+(Get-TraceStatusLabel $resultEvidence.usb.status)+' / '+$resultEvidence.usb.bytes+' bytes、Audio：'+(Get-TraceStatusLabel $resultEvidence.audioTrace.status)+' / '+$resultEvidence.audioTrace.bytes+' bytes。'
+            $recordingNote+="`r`n"+'USBイベント検査：'+$resultEvidence.usbValidation.status+'。詳細は「USB・Audio取得結果」で確認できます。'
+        }
         $explain=New-UiLabel ('録音・観察は終了しました。ノイズ記録 '+@($test.noiseUtc).Count+' 回。'+$recordingNote+"`r`n"+'結果を保存して次へ進みます。閉じた場合は結果未確定の中断記録として保存します。');$explain.Dock='Top'
         $endNotes=New-Object Windows.Forms.TextBox;$endNotes.Multiline=$true;$endNotes.ScrollBars='Vertical';$endNotes.Dock='Fill';$endNotes.Text=$test.notes
         $accept=New-UiButton '結果を保存して次へ';$accept.Dock='Bottom';$accept.DialogResult='OK'
         $answerForm.Controls.Add($endNotes);$answerForm.Controls.Add($answer);$answerForm.Controls.Add($explain);$answerForm.Controls.Add($accept);$answerForm.AcceptButton=$accept
         if($SmokeTest){$answerForm.Add_Shown({$endNotes.Text+=' / UI test completion';$answer.SelectedIndex=2;$answerForm.DialogResult='OK';$answerForm.Close()})}
         try {
-            if($answerForm.ShowDialog($form) -eq 'OK'){$test.result=@('NoRepro','Improved','Unchanged','Worse')[$answer.SelectedIndex];$test.notes=$endNotes.Text}
+            if($answerForm.ShowDialog($form) -eq 'OK'){$test.result=if($captureNotStarted){'Inconclusive'}else{@('NoRepro','Improved','Unchanged','Worse','Inconclusive')[$answer.SelectedIndex]};$test.notes=$endNotes.Text}
             else{$test.result='Interrupted';$test.notes+=' / 終了後の結果入力は未確定。'}
         }finally{$answerForm.Dispose()}
         $script:activeTest=$null;$script:finishRequested=$false;Save-CurrentSession
